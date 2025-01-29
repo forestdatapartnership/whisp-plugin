@@ -1,0 +1,5 @@
+<RCC>
+    <qresource prefix="/plugins/whisp_analysis" >
+        <file>icon.png</file>
+    </qresource>
+</RCC>
