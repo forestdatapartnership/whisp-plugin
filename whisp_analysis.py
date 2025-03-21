@@ -367,7 +367,7 @@ class LayerSelectionDialog(QDialog):
             self,
             "Select Output File",
             default_dir,
-            "GeoJSON Files (*.geojson);;Shapefiles (*.shp)"
+            "GeoJSON Files (*.geojson)"
         )
         if file_path:
             self.newFileLineEdit.setText(file_path)
@@ -564,6 +564,13 @@ class whisp_analysis:
             return
 
 
+        # Check if the input layer is already fully whisped
+        existing_whisp_fields = set(field.name() for field in input_layer.fields()).intersection(set(self.whisp_columns_mapping.keys()))
+        if len(existing_whisp_fields) == len(self.whisp_columns_mapping):
+            QgsMessageLog.logMessage("Input layer already contains all Whisp fields. Creating a clean copy for re‑whisping.", "WhispAnalysis", Qgis.Info)
+            input_layer = self.create_clean_layer(input_layer)
+
+
         # Process the output file name:
         import os
         if not os.path.isabs(output_file):
@@ -723,6 +730,41 @@ class whisp_analysis:
             QgsMessageLog.logMessage("Error writing vector file: " + result[1], "WhispAnalysis", Qgis.Critical)
             return None
 
+
+    def create_clean_layer(self, input_layer):
+        # Filter out fields that are in the Whisp columns mapping
+        original_fields = [field for field in input_layer.fields() if field.name() not in self.whisp_columns_mapping]
+        
+        # Convert the input layer's WKB type to a geometry type string.
+        from qgis.core import QgsWkbTypes
+        geom_type_str = QgsWkbTypes.displayString(input_layer.wkbType())
+        crs = input_layer.crs().authid()
+        
+        # Create a new memory layer with the proper geometry type string and CRS.
+        layer_str = f"{geom_type_str}?crs={crs}"
+        clean_layer = QgsVectorLayer(layer_str, "clean_layer", "memory")
+        
+        if not clean_layer.isValid():
+            QgsMessageLog.logMessage("Clean layer failed to initialize", "WhispAnalysis", Qgis.Critical)
+            return None
+        
+        # Add only the original fields to the new layer.
+        dp = clean_layer.dataProvider()
+        dp.addAttributes(original_fields)
+        clean_layer.updateFields()
+        
+        # Copy features from the input layer, keeping only the original attributes.
+        features = []
+        for feature in input_layer.getFeatures():
+            new_feature = QgsFeature()
+            new_feature.setGeometry(feature.geometry())
+            attr_list = [feature[field.name()] for field in original_fields]
+            new_feature.setAttributes(attr_list)
+            features.append(new_feature)
+        dp.addFeatures(features)
+        clean_layer.updateExtents()
+        
+        return clean_layer
 
 
 
