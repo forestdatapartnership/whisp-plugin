@@ -150,8 +150,9 @@ class LayerSelectionDialog(QDialog):
         inputLayout.addWidget(self.browseInputButton)
         layout.addLayout(inputLayout)
 
-        # Set default selection from QGIS's active layer, if available.
-        default_layer = self.iface.activeLayer() if hasattr(self, "iface") else None
+        # Use the passed default_layer, or fallback to the active layer from iface.
+        if default_layer is None and hasattr(self, "iface"):
+            default_layer = self.iface.activeLayer()
         if default_layer is not None:
             for index in range(self.inputCombo.count()):
                 if self.inputCombo.itemData(index) == default_layer:
@@ -219,6 +220,33 @@ class LayerSelectionDialog(QDialog):
         self.applyCustomStyleSheet()
 
     def accept(self):
+
+        # First, check CRS of the selected input layer.
+        input_layer = self.inputCombo.currentData()
+        if input_layer:
+            source_crs = input_layer.crs()
+            # Construct a detailed CRS string, e.g. "EPSG:3857 - Google Maps CRS"
+            source_crs_str = f"{source_crs.authid()} - {source_crs.description()}"
+            if source_crs.authid() != "EPSG:4326":
+                msgBox = QMessageBox(self)
+                msgBox.setIcon(QMessageBox.Warning)
+                msgBox.setWindowTitle("CRS Conversion Warning")
+                # Build HTML message with extra spacing and bold/italic for the CRS information.
+                msg = (
+                    f"<p>Your input geometry is in <b>{source_crs_str}</b>.</p>"
+                    f"<p>The output will be in <b>EPSG:4326 - WGS84</b>.</p>"
+                    f"<p>Do you wish to proceed?</p>"
+                )
+                msgBox.setTextFormat(Qt.RichText)
+                msgBox.setText(msg)
+                proceed_button = msgBox.addButton("Proceed", QMessageBox.AcceptRole)
+                cancel_button = msgBox.addButton("Cancel", QMessageBox.RejectRole)
+                msgBox.setDefaultButton(cancel_button)
+                msgBox.exec_()
+                if msgBox.clickedButton() == cancel_button:
+                    # User cancelled the CRS warning; keep the dialog open.
+                    return
+
         # Only prompt if we haven't already confirmed re‑whisp.
         if not getattr(self, 'allow_rewhisp', False):
             analysis_fields = set(self.columns_mapping.keys())
@@ -563,6 +591,8 @@ class whisp_analysis:
                                     "WhispAnalysis", Qgis.Warning)
             return
 
+        # Reproject the input layer to EPSG:4326
+        input_layer = self.convert_to_epsg4326(input_layer)
 
         # Check if the input layer is already fully whisped
         existing_whisp_fields = set(field.name() for field in input_layer.fields()).intersection(set(self.whisp_columns_mapping.keys()))
@@ -837,17 +867,13 @@ class whisp_analysis:
         target_crs = QgsCoordinateReferenceSystem("EPSG:4326")  # Define target CRS
 
         if source_crs.authid() != target_crs.authid():
-            # Show a dialog informing the user.
-            msg = ("Your input geometry is in CRS {}. Please be aware that the output file "
-                "will be in WGS84 (EPSG:4326).").format(source_crs.authid())
-            QMessageBox.information(self.iface.mainWindow(), "CRS Conversion", msg)
-
             QgsMessageLog.logMessage(f"Reprojecting layer from {source_crs.authid()} to EPSG:4326...", "WhispAnalysis", Qgis.Info)
 
-            # Create a new memory layer with the same geometry type.
-            # (Adjust the geometry type as needed; here we assume Polygon.)
+            # Determine the geometry type dynamically.
+            from qgis.core import QgsWkbTypes
+            geom_type_str = QgsWkbTypes.displayString(layer.wkbType())
             layer_name = layer.name() + " (EPSG:4326)"
-            reprojected_layer = QgsVectorLayer("Polygon?crs=EPSG:4326", layer_name, "memory")
+            reprojected_layer = QgsVectorLayer(f"{geom_type_str}?crs=EPSG:4326", layer_name, "memory")
 
             # Copy fields from the original layer.
             reprojected_layer_data_provider = reprojected_layer.dataProvider()
@@ -874,6 +900,8 @@ class whisp_analysis:
         else:
             QgsMessageLog.logMessage("Layer is already in EPSG:4326.", "WhispAnalysis", Qgis.Info)
             return layer
+
+
 
 
 
