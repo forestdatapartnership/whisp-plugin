@@ -7,7 +7,401 @@
  ***************************************************************************/
 """
 
-from qgis.PyQt.QtCore import QThread, pyqtSignal, QObject
+import subprocess
+import sys
+import os
+import requests
+import json
+import tempfile
+
+def check_and_install(package):
+    """Check if a package is installed, and install it if not."""
+    try:
+        __import__(package)
+    except ImportError:
+        subprocess.check_call([sys.executable, "-m", "pip", "install", package])
+
+# Ensure required packages are installed
+check_and_install("requests")
+
+from PyQt5.QtWidgets import (
+    QDialog, QVBoxLayout, QHBoxLayout, QComboBox, QLabel, QRadioButton,
+    QLineEdit, QPushButton, QDialogButtonBox, QFileDialog, QProgressBar, QScrollArea, QWidget, QCheckBox
+)
+
+
+from qgis.core import QgsProject, QgsMapLayer, QgsVectorFileWriter, QgsVectorLayer, QgsMessageLog, Qgis, QgsField, QgsCoordinateReferenceSystem, QgsCoordinateTransform, QgsFeature
+from qgis.PyQt.QtCore import QThread, pyqtSignal, QObject, QSettings, QTranslator, QCoreApplication, QVariant
+
+from qgis.PyQt.QtGui import QIcon, QPixmap
+from qgis.PyQt.QtWidgets import QAction, QProgressBar, QMessageBox
+
+from .resources import *  # Qt resources
+from .whisp_analysis_dialog import whisp_analysisDialog
+import os.path
+from PyQt5.QtCore import QVariant, QThread, pyqtSignal, QObject, Qt, QTimer
+
+
+
+
+
+
+
+class InitializationDialog(QDialog):
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setWindowIcon(QIcon(":/plugins/whisp_analysis/icon.png"))
+        self.setWindowTitle("Whisp")
+        layout = QVBoxLayout()
+        self.label = QLabel("Initializing OpenForis Whisp, please wait...")
+        layout.addWidget(self.label)
+        self.progress_bar = QProgressBar()
+        self.progress_bar.setRange(0, 0)  # Indeterminate progress
+        layout.addWidget(self.progress_bar)
+        self.setLayout(layout)
+
+# --- Worker to send the test geometry ---
+class InitializationWorker(QObject):
+    finished = pyqtSignal(dict)
+    progress = pyqtSignal(str)
+
+    def run(self):
+        #self.progress.emit("Sending test geometry to Whisp API...")
+        test_geojson = {
+            "type": "FeatureCollection",
+            "features": [
+                {"type": "Feature", "geometry": {"type": "Point", "coordinates": [0, 0]}, "properties": {}}
+            ]
+        }
+        url = "https://whisp.openforis.org/api/geojson"
+        headers = {"Content-Type": "application/json"}
+        try:
+            response = requests.post(url, json=test_geojson, headers=headers)
+            if response.status_code == 200:
+                result = response.json()
+                self.progress.emit("Initialization complete.")
+                self.finished.emit(result)
+            else:
+                error_msg = f"Error {response.status_code}: {response.text}"
+                self.progress.emit(error_msg)
+                self.finished.emit({"error": error_msg})
+        except Exception as e:
+            error_msg = f"Request failed: {str(e)}"
+            self.progress.emit(error_msg)
+            self.finished.emit({"error": error_msg})
+
+
+
+class LayerSelectionDialog(QDialog):
+    def __init__(self, columns_mapping, parent=None, default_layer=None):
+        super().__init__(parent)
+        self.columns_mapping = columns_mapping  # store for later use
+        self.setWindowTitle("Whisp")
+        self.setWindowIcon(QIcon(":/plugins/whisp_analysis/icon.png"))
+        layout = QVBoxLayout(self)
+
+        # --- Header with Title and Whisp Logo ---
+        headerLayout = QHBoxLayout()
+
+        # Left part: Title and description.
+        textLayout = QVBoxLayout()
+        titleLabel = QLabel("Whisp")
+        font = titleLabel.font()
+        font.setPointSize(font.pointSize() * 2)  # Double the current font size.
+        font.setBold(True)
+        titleLabel.setFont(font)
+        descriptionLabel = QLabel("Analyze your geometries for deforestation risk through the OpenForis Whisp API and output them as GeoJSON.")
+        descriptionLabel.setWordWrap(True)
+        textLayout.addWidget(titleLabel)
+        textLayout.addWidget(descriptionLabel)
+        headerLayout.addLayout(textLayout)
+
+        headerLayout.addStretch()
+
+        # Right part: the icon.
+        logoLabel = QLabel()
+        logoPixmap = QPixmap(":/plugins/whisp_analysis/icon.png")
+        if not logoPixmap.isNull():
+            scaledLogo = logoPixmap.scaled(
+                int(logoPixmap.width() * 0.2),
+                int(logoPixmap.height() * 0.2),
+                Qt.KeepAspectRatio,
+                Qt.SmoothTransformation
+            )
+            logoLabel.setPixmap(scaledLogo)
+        headerLayout.addWidget(logoLabel)
+
+        layout.addLayout(headerLayout)
+        layout.addSpacing(20)
+
+        # --- Input Layer Selection ---
+        layout.addWidget(QLabel("Select Input Layer:"))
+        inputLayout = QHBoxLayout()
+        self.inputCombo = QComboBox()
+        layers = [layer for layer in QgsProject.instance().mapLayers().values()
+                if layer.type() == QgsMapLayer.VectorLayer]
+        for layer in layers:
+            self.inputCombo.addItem(layer.name(), layer)
+        inputLayout.addWidget(self.inputCombo)
+
+        # Add a "Browse..." button for input layers.
+        self.browseInputButton = QPushButton("Browse...")
+        self.browseInputButton.setFixedWidth(100)
+        inputLayout.addWidget(self.browseInputButton)
+        layout.addLayout(inputLayout)
+
+        # Set default selection from QGIS's active layer, if available.
+        default_layer = self.iface.activeLayer() if hasattr(self, "iface") else None
+        if default_layer is not None:
+            for index in range(self.inputCombo.count()):
+                if self.inputCombo.itemData(index) == default_layer:
+                    self.inputCombo.setCurrentIndex(index)
+                    break
+
+        self.inputCombo.currentIndexChanged.connect(self.updateOkButtonState)
+        self.browseInputButton.clicked.connect(self.browseInputLayer)
+
+        # Warning label for too many geometries.
+        self.inputWarningLabel = QLabel("")
+        self.inputWarningLabel.setStyleSheet("font-style: italic; color: red;")
+        self.inputWarningLabel.setVisible(False)
+        layout.addWidget(self.inputWarningLabel)
+
+        # --- Output File Selection ---
+        layout.addWidget(QLabel("Output File Name:"))
+        fileLayout = QHBoxLayout()
+        self.newFileLineEdit = QLineEdit()
+        self.newFileBrowseButton = QPushButton("Browse...")
+        self.newFileBrowseButton.setFixedWidth(100)
+        fileLayout.addWidget(self.newFileLineEdit)
+        fileLayout.addWidget(self.newFileBrowseButton)
+        layout.addLayout(fileLayout)
+        self.newFileBrowseButton.clicked.connect(self.browseNewFile)
+        self.newFileLineEdit.textChanged.connect(self.updateOkButtonState)
+
+        # --- Output Columns Selection ---
+        layout.addWidget(QLabel("Select Output Columns:"))
+        self.scroll_area = QScrollArea()
+        self.scroll_area.setWidgetResizable(True)
+        self.checkbox_widget = QWidget()
+        self.checkbox_widget.setObjectName("checkboxWidget")
+        self.checkbox_layout = QVBoxLayout(self.checkbox_widget)
+        self.checkboxes = {}
+        for column in columns_mapping:
+            checkbox = QCheckBox(column)
+            checkbox.setChecked(True)
+            checkbox.stateChanged.connect(self.updateOkButtonState)
+            self.checkboxes[column] = checkbox
+            self.checkbox_layout.addWidget(checkbox)
+        self.scroll_area.setWidget(self.checkbox_widget)
+        layout.addWidget(self.scroll_area)
+
+        # --- Quick Selection Buttons ---
+        btnLayout = QHBoxLayout()
+        self.btnDeselectAll = QPushButton("Deselect all")
+        self.btnSelectAll = QPushButton("Select all")
+        self.btnSelectEUDR = QPushButton("Reduced Selection")
+        btnLayout.addWidget(self.btnDeselectAll)
+        btnLayout.addWidget(self.btnSelectAll)
+        btnLayout.addWidget(self.btnSelectEUDR)
+        layout.addLayout(btnLayout)
+        self.btnDeselectAll.clicked.connect(self.deselectAll)
+        self.btnSelectAll.clicked.connect(self.selectAll)
+        self.btnSelectEUDR.clicked.connect(self.selectEUDRRelevant)
+
+        # --- Dialog Buttons (OK/Cancel) ---
+        self.buttonBox = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
+        self.buttonBox.accepted.connect(self.accept)
+        self.buttonBox.rejected.connect(self.reject)
+        layout.addWidget(self.buttonBox)
+
+        self.updateOkButtonState()
+        self.applyCustomStyleSheet()
+
+    def accept(self):
+        # Only prompt if we haven't already confirmed re‑whisp.
+        if not getattr(self, 'allow_rewhisp', False):
+            analysis_fields = set(self.columns_mapping.keys())
+            input_layer = self.inputCombo.currentData()
+            input_field_names = set(field.name() for field in input_layer.fields())
+            missing_fields = analysis_fields.difference(input_field_names)
+            # If five or fewer expected analysis fields are missing, assume it’s been whisped.
+            if len(missing_fields) <= 5:
+                msgBox = QMessageBox(self)
+                msgBox.setIcon(QMessageBox.Warning)
+                msgBox.setWindowTitle("Re‑whisp?")
+                msgBox.setText("It seems you have previously whisped this input layer. Do you want to whisp it again?")
+                rewhisp_button = msgBox.addButton("Re‑whisp", QMessageBox.AcceptRole)
+                cancel_button = msgBox.addButton("Cancel", QMessageBox.RejectRole)
+                msgBox.setDefaultButton(cancel_button)
+                msgBox.exec_()
+                if msgBox.clickedButton() == cancel_button:
+                    # User chose to cancel; do not close the dialog.
+                    return
+                else:
+                    # User chose to re‑whisp.
+                    self.allow_rewhisp = True
+                    # Disconnect the accepted signal so it doesn’t trigger the prompt again.
+                    try:
+                        self.buttonBox.accepted.disconnect(self.accept)
+                    except Exception as e:
+                        # In case it wasn’t connected or already disconnected.
+                        pass
+                    super().accept()
+                    return
+        # If already allowed or the check doesn't apply, accept normally.
+        super().accept()
+
+
+
+
+
+
+    def applyCustomStyleSheet(self):
+        """
+        Applies a style sheet that:
+        - Forces the scroll area viewport to have a white background
+        - Adds thinner horizontal lines (0.5px) under each checkbox that span the full width
+        - Styles the scrollbar for a 3D-like look
+        """
+
+        # Make sure the scroll area viewport is white.
+        self.scroll_area.viewport().setStyleSheet("background-color: white;")
+
+        # Give the checkbox layout zero margins and spacing so lines can stretch edge to edge.
+        self.checkbox_layout.setContentsMargins(0, 0, 0, 0)
+        self.checkbox_layout.setSpacing(0)
+
+        # Style the scrollbar with a simple 3D-like gradient.
+        self.scroll_area.setStyleSheet("""
+            QScrollBar:vertical {
+                border: 1px solid #999999;
+                background: #F0F0F0;
+                width: 12px;
+                margin: 0px 0px 0px 0px;
+            }
+            QScrollBar::handle:vertical {
+                background: qlineargradient(
+                    x1:0, y1:0, x2:0, y2:1,
+                    stop:0 #E4E4E4,
+                    stop:0.5 #D1D1D1,
+                    stop:0.5 #C7C7C7,
+                    stop:1 #BFBFBF
+                );
+                min-height: 20px;
+                border: 1px solid #AAA;
+                border-radius: 4px;
+            }
+            QScrollBar::add-line:vertical {
+                height: 14px;
+                subcontrol-position: bottom;
+                subcontrol-origin: margin;
+                border: 1px solid #999;
+                background: #C2CCDF;
+            }
+            QScrollBar::sub-line:vertical {
+                height: 14px;
+                subcontrol-position: top;
+                subcontrol-origin: margin;
+                border: 1px solid #999;
+                background: #C2CCDF;
+            }
+            QScrollBar::add-page:vertical,
+            QScrollBar::sub-page:vertical {
+                background: none;
+            }
+        """)
+
+        # Thinner lines (0.5px) between checkboxes that span from left to right.
+        # Removing margins ensures the line extends fully across the layout width.
+        self.checkbox_widget.setStyleSheet("""
+            QCheckBox {
+                border-bottom: 0.1px solid #CCC;
+                margin: 0;
+                padding: 4px 0;
+            }
+        """)
+
+
+    def updateOkButtonState(self):
+        ok_button = self.buttonBox.button(QDialogButtonBox.Ok)
+        file_ok = bool(self.newFileLineEdit.text().strip())
+        # Check if at least one checkbox is selected.
+        column_ok = any(cb.isChecked() for cb in self.checkboxes.values())
+        ok_button.setEnabled(file_ok and column_ok)
+    
+    def browseInputLayer(self):
+        file_path, _ = QFileDialog.getOpenFileName(
+            self,
+            "Select Geometry File",
+            "",
+            "Vector Files (*.shp *.geojson *.gpkg);;All Files (*)"
+        )
+        if file_path:
+            new_layer = QgsVectorLayer(file_path, os.path.basename(file_path), "ogr")
+            if not new_layer.isValid():
+                QMessageBox.critical(self, "Error", "The selected file could not be loaded as a vector layer.")
+            else:
+                # Keep a reference so it isn’t garbage-collected.
+                if not hasattr(self, 'extraInputLayers'):
+                    self.extraInputLayers = []
+                self.extraInputLayers.append(new_layer)
+                
+                self.inputCombo.addItem(new_layer.name(), new_layer)
+                self.inputCombo.setCurrentIndex(self.inputCombo.count() - 1)
+
+
+
+
+
+    def browseNewFile(self):
+        # Start at the directory of the currently selected input layer (if any).
+        selected_layer = self.inputCombo.currentData()
+        default_dir = ""
+        src = ""  # initialize src so it's always defined
+        if selected_layer is not None:
+            src = selected_layer.source()
+            if src:
+                default_dir = os.path.dirname(src)
+        file_path, _ = QFileDialog.getSaveFileName(
+            self,
+            "Select Output File",
+            default_dir,
+            "GeoJSON Files (*.geojson);;Shapefiles (*.shp)"
+        )
+        if file_path:
+            self.newFileLineEdit.setText(file_path)
+
+
+
+    def deselectAll(self):
+        for checkbox in self.checkboxes.values():
+            checkbox.setChecked(False)
+
+    def selectAll(self):
+        for checkbox in self.checkboxes.values():
+            checkbox.setChecked(True)
+
+    def selectEUDRRelevant(self):
+        # Adjust these names if needed (e.g., use "Plot_area_ha" instead of "Area").
+        for col, checkbox in self.checkboxes.items():
+            if col in {"Area", "ProducerCountry", "EUDR_risk"}:
+                checkbox.setChecked(True)
+            else:
+                checkbox.setChecked(False)
+
+    def getSelections(self):
+        """Return the chosen input layer, output file path, and list of selected columns."""
+        input_layer = self.inputCombo.currentData()
+        output_file = self.newFileLineEdit.text()
+        selected_columns = [col for col, cb in self.checkboxes.items() if cb.isChecked()]
+        return input_layer, output_file, selected_columns
+
+
+
+
+
+
 
 class WhispWorker(QObject):
     """Handles the API request in a background thread."""
@@ -40,16 +434,7 @@ class WhispWorker(QObject):
             self.finished.emit({"error": error_msg})
 
 
-from qgis.PyQt.QtCore import QSettings, QTranslator, QCoreApplication
-from qgis.PyQt.QtGui import QIcon
-from qgis.PyQt.QtWidgets import QAction, QProgressBar, QMessageBox
-import requests
-from qgis.core import QgsProject, QgsMessageLog, Qgis, QgsVectorLayer, QgsField
-from .resources import *  # Qt resources
-from .whisp_analysis_dialog import whisp_analysisDialog
-import os.path
-from PyQt5.QtCore import QVariant
-import json
+
 
 
 class whisp_analysis:
@@ -62,30 +447,28 @@ class whisp_analysis:
         self.actions = []
         self.menu = self.tr(u"&Whisp Analysis")
         self.first_start = None
+        self.whisp_columns_file = None  # This will store the path to our temp file
 
     def tr(self, message):
         """Translate a string."""
         return QCoreApplication.translate("whisp_analysis", message)
 
     def initGui(self):
-        """Create menu entries and toolbar icons in the QGIS GUI."""
-        QgsMessageLog.logMessage("Initializing GUI...", "WhispAnalysis", Qgis.Info)
-
+        
+        # Add toolbar / menu actions
         icon_path = ":/plugins/whisp_analysis/icon.png"
         self.add_action(
             icon_path=icon_path,
-            text=self.tr("Whisp selected layer"),
+            text=self.tr("Start OpenForis Whisp"),
             callback=self.on_submit_geojson,
             status_tip=self.tr("Whisping..."),
             add_to_toolbar=True,
             add_to_menu=True,
             parent=self.iface.mainWindow()
         )
-
         self.first_start = True
 
     def add_action(self, icon_path, text, callback, status_tip=None, add_to_toolbar=True, add_to_menu=True, parent=None):
-        """Add a toolbar icon to the toolbar."""
         icon = QIcon(icon_path)
         action = QAction(icon, text, parent)
         action.triggered.connect(callback)
@@ -97,55 +480,253 @@ class whisp_analysis:
             self.iface.addPluginToMenu(self.menu, action)
         return action
 
+    def initialize_whisp_columns(self):
+        init_dialog = InitializationDialog(self.iface.mainWindow())
+        # Set up the progress bar as a percentage bar.
+        init_dialog.progress_bar.setRange(0, 100)
+        init_dialog.progress_bar.setValue(0)
+
+        # Create a timer that will increment the progress bar value.
+        timer = QTimer(init_dialog)
+        timer.setInterval(100)  # 100 ms intervals -> 100 steps for 10 seconds.
+        timer.timeout.connect(lambda: init_dialog.progress_bar.setValue(
+            min(init_dialog.progress_bar.value() + 1, 100)))
+        timer.start()
+
+        thread = QThread()
+        worker = InitializationWorker()
+        worker.moveToThread(thread)
+
+        def on_worker_finished(result):
+            timer.stop()  # Stop the progress timer.
+            init_dialog.progress_bar.setValue(100)
+            self.on_initialization_finished(result, init_dialog)
+
+        worker.finished.connect(on_worker_finished)
+        worker.progress.connect(lambda msg: init_dialog.label.setText(msg))
+        worker.finished.connect(thread.quit)
+        worker.finished.connect(worker.deleteLater)
+        thread.finished.connect(thread.deleteLater)
+        thread.started.connect(worker.run)
+
+        self.init_thread = thread  # Keep a reference.
+        thread.start()
+        init_dialog.exec_()
+
+
+    def on_initialization_finished(self, result, dialog):
+        if "error" not in result:
+            if "data" in result and result["data"]:
+                first_row = result["data"][0]
+                mapping = {}
+                for key, value in first_row.items():
+                    if key == "plotId":
+                        mapping[key] = "int"
+                    # Treat any numeric value as double regardless if it's an int or a float.
+                    elif isinstance(value, (int, float)):
+                        mapping[key] = "double"
+                    else:
+                        mapping[key] = "string"
+                self.whisp_columns_mapping = mapping
+                QgsMessageLog.logMessage(
+                    f"Whisp columns mapping: {self.whisp_columns_mapping}",
+                    "WhispAnalysis", Qgis.Info)
+        else:
+            QgsMessageLog.logMessage("Initialization error: " + result["error"],
+                                    "WhispAnalysis", Qgis.Warning)
+        dialog.accept()
+
+
+    
+
+
     def unload(self):
         """Remove the plugin menu item and toolbar icon."""
         for action in self.actions:
             self.iface.removeToolBarIcon(action)
             self.iface.removePluginMenu(self.menu, action)
 
+    
+    
     def on_submit_geojson(self):
-        """Start the Whisp analysis process with a progress bar and background thread."""
-        layer = self.iface.activeLayer()
-        if not layer:
-            QgsMessageLog.logMessage("No layer selected.", "WhispAnalysis", Qgis.Warning)
+        # Trigger initialization if it hasn't been done yet.
+        if not hasattr(self, 'whisp_columns_mapping') or not self.whisp_columns_mapping:
+            self.initialize_whisp_columns()
+
+        dialog = LayerSelectionDialog(self.whisp_columns_mapping, self.iface.mainWindow(), self.iface.activeLayer())
+        if not dialog.exec_():
             return
 
-        # Ensure required fields exist before making an API call
-        self.ensure_required_fields(layer)
+        input_layer, output_file, selected_columns = dialog.getSelections()
+        if not input_layer or not output_file or not selected_columns:
+            QgsMessageLog.logMessage("Invalid selection. Ensure an input layer, output file, and at least one column are selected.",
+                                    "WhispAnalysis", Qgis.Warning)
+            return
 
-        # Generate GeoJSON
-        geojson = self.get_selected_layer_as_geojson(layer)
+
+        # Process the output file name:
+        import os
+        if not os.path.isabs(output_file):
+            input_source = input_layer.source()
+            input_dir = os.path.dirname(input_source) if input_source else ""
+            output_file = os.path.join(input_dir, output_file)
+        if not output_file.lower().endswith(".geojson"):
+            output_file += ".geojson"
+
+        # Ensure the input layer has a "plotId" field.
+        if "plotId" not in [field.name() for field in input_layer.fields()]:
+            input_layer.startEditing()
+            input_layer.dataProvider().addAttributes([QgsField("plotId", QVariant.Int)])
+            input_layer.updateFields()
+            input_layer.commitChanges()
+
+        # Populate the "plotId" values.
+        if not input_layer.isEditable():
+            input_layer.startEditing()
+        for idx, feature in enumerate(input_layer.getFeatures(), start=1):
+            feature["plotId"] = idx
+            input_layer.updateFeature(feature)
+        input_layer.commitChanges()
+
+        # Now create the output layer.
+        output_layer = self.createNewOutputLayer(input_layer, output_file)
+        if output_layer is None:
+            QgsMessageLog.logMessage("Failed to create new output layer.", "WhispAnalysis", Qgis.Critical)
+            return
+
+        QgsProject.instance().addMapLayer(output_layer)
+        self.selected_output_layer = output_layer
+
+        self.ensure_required_fields(output_layer, selected_columns)
+        geojson = self.get_selected_layer_as_geojson(input_layer)
         if not geojson:
             return
 
-        # Show a progress message in QGIS status bar
-        self.iface.messageBar().clearWidgets()
-        progress_msg = self.iface.messageBar().createMessage("Whisping... Please wait.")
-        progress_bar = QProgressBar()
-        progress_bar.setRange(0, 0)  # Indeterminate progress
-        progress_msg.layout().addWidget(progress_bar)
-        self.iface.messageBar().pushWidget(progress_msg, Qgis.Info)
 
-        # Disable UI elements to prevent multiple clicks
+        # Create a modal progress dialog for the API call.
+        processing_dialog = QDialog(self.iface.mainWindow())
+        processing_dialog.setWindowTitle("Whisp")
+        processing_dialog.setWindowIcon(QIcon(":/plugins/whisp_analysis/icon.png"))
+        proc_layout = QVBoxLayout(processing_dialog)
+        progress_label = QLabel("Sending request to Whisp API...")
+        proc_layout.addWidget(progress_label)
+        progress_bar = QProgressBar()
+
+        import math
+        num_features = input_layer.featureCount()
+        # Total time = 10 sec (10000ms) plus 10ms per feature.
+        total_time_ms = 10000 + (num_features * 10)
+        ticks = int(math.ceil(total_time_ms / 100.0))  # with 100ms intervals.
+        progress_bar.setRange(0, ticks)
+        progress_bar.setValue(0)
+        proc_layout.addWidget(progress_bar)
+
+        # Add a Cancel button.
+        btn_layout = QHBoxLayout()
+        btn_layout.addStretch()
+        cancel_button = QPushButton("Cancel")
+        btn_layout.addWidget(cancel_button)
+        proc_layout.addLayout(btn_layout)
+
+        processing_dialog.setLayout(proc_layout)
+        processing_dialog.show()
+
+        # After 3 seconds, change the label text.
+        QTimer.singleShot(3000, lambda: progress_label.setText("Whisp API processing..."))
+
+        # Create a timer that updates the progress bar every 100ms.
+        timer = QTimer(processing_dialog)
+        timer.setInterval(100)
+        timer.timeout.connect(lambda: progress_bar.setValue(min(progress_bar.value() + 1, ticks)))
+        timer.start()
+
+        # Initialize a cancellation flag.
+        self.cancelled = False
+
+        def cancel_operation():
+            self.cancelled = True
+            timer.stop()
+            try:
+                if self.thread is not None and self.thread.isRunning():
+                    self.thread.terminate()  # Forcefully terminate the thread.
+            except Exception as e:
+                QgsMessageLog.logMessage(f"Error terminating thread: {e}", "WhispAnalysis", Qgis.Warning)
+            processing_dialog.reject()  # Close the progress dialog.
+            for action in self.actions:
+                action.setEnabled(True)
+            QgsMessageLog.logMessage("User cancelled the API call.", "WhispAnalysis", Qgis.Warning)
+
+        cancel_button.clicked.connect(cancel_operation)
+
         for action in self.actions:
             action.setEnabled(False)
 
-        # Start background API request
         self.worker = WhispWorker(geojson)
         self.thread = QThread()
-        
         self.worker.moveToThread(self.thread)
         self.thread.started.connect(self.worker.run)
-        self.worker.finished.connect(self.on_api_response)
-        self.worker.progress.connect(lambda msg: self.iface.messageBar().pushMessage(msg, Qgis.Info))
+        self.worker.finished.connect(lambda result: self.on_api_response_with_progress(result, timer, progress_bar, processing_dialog))
+        self.worker.progress.connect(lambda msg: progress_label.setText(msg))
         self.worker.finished.connect(self.thread.quit)
         self.worker.finished.connect(self.worker.deleteLater)
         self.thread.finished.connect(self.thread.deleteLater)
         self.thread.start()
 
 
+
+    def on_api_response_with_progress(self, result, timer, progress_bar, processing_dialog):
+        timer.stop()
+        progress_bar.setValue(progress_bar.maximum())
+        if self.cancelled:
+            return
+        processing_dialog.accept()  # Close the dialog.
+        for action in self.actions:
+            action.setEnabled(True)
+        self.on_api_response(result)
+
+
+
+
+
+
+
+
+    
+
+    def createNewOutputLayer(self, input_layer, output_file):
+        """
+        Create a new vector layer for output using the input layer's settings.
+        The new file is saved to output_file. This example assumes GeoJSON output.
+        """
+        # Set up the options for saving the file.
+        options = QgsVectorFileWriter.SaveVectorOptions()
+        options.driverName = "GeoJSON"
+        options.fileEncoding = "UTF-8"
+
+        # Get the project's transform context.
+        transform_context = QgsProject.instance().transformContext()
+
+        # Write the vector layer using the new API.
+        result = QgsVectorFileWriter.writeAsVectorFormatV2(
+            input_layer,
+            output_file,
+            transform_context,
+            options
+        )
+
+        # The result is a tuple (error code, error message).
+        if result[0] == QgsVectorFileWriter.NoError:
+            # Load the newly created layer.
+            new_layer = QgsVectorLayer(output_file, os.path.basename(output_file), "ogr")
+            return new_layer
+        else:
+            QgsMessageLog.logMessage("Error writing vector file: " + result[1], "WhispAnalysis", Qgis.Critical)
+            return None
+
+
+
+
     def on_api_response(self, result):
-        """Handles the API response and updates the layer with data."""
         self.iface.messageBar().clearWidgets()  # Remove progress bar
 
         # Re-enable UI actions
@@ -159,86 +740,122 @@ class whisp_analysis:
 
         QgsMessageLog.logMessage(f"Whisp API Response: {result}", "WhispAnalysis", Qgis.Info)
 
-        layer = self.iface.activeLayer()
-        if layer and "data" in result:
-            self.append_data_to_layer(layer, result["data"])
-            
-            # **Show success message**
-            QMessageBox.information(
-                self.iface.mainWindow(),
-                "Whisp Analysis Complete",
-                "Geometries whisped successfully!\nValues appended to attribute table."
-            )
+        # Update the selected output layer with API results.
+        if self.selected_output_layer and "data" in result:
+            self.append_data_to_layer(self.selected_output_layer, result["data"])
+            msg_box = QMessageBox(self.iface.mainWindow())
+            msg_box.setWindowIcon(QIcon(":/plugins/whisp_analysis/icon.png"))
+            msg_box.setIcon(QMessageBox.Information)
+            msg_box.setWindowTitle("Whisp")
+            msg_box.setText("Geometries whisped successfully!\n\nValues appended to the output layer.")
+            msg_box.exec_()
 
 
 
-    def ensure_required_fields(self, layer):
-        """Ensure all expected fields exist in the layer before making an API call, with correct data types."""
-        
-        # Define expected field types
-        required_fields = [
-            ("plotId", QVariant.Int),  # Force plotId to be Integer
-            # Numeric fields
-            ("Plot_area_ha", QVariant.Double), ("Centroid_lon", QVariant.Double), ("Centroid_lat", QVariant.Double),
-            ("EUFO_2020", QVariant.Double), ("GLAD_Primary", QVariant.Double), ("TMF_undist", QVariant.Double),
-            ("JAXA_FNF_2020", QVariant.Double), ("GFC_TC_2020", QVariant.Double), ("Forest_FDaP", QVariant.Double),
-            ("ESA_TC_2020", QVariant.Double), ("TMF_plant", QVariant.Double), ("Oil_palm_Descals", QVariant.Double),
-            ("Oil_palm_FDaP", QVariant.Double), ("Cocoa_FDaP", QVariant.Double), ("Cocoa_ETH", QVariant.Double),
-            ("Cocoa_bnetd", QVariant.Double), ("Rubber_FDaP", QVariant.Double), ("Rubber_RBGE", QVariant.Double),
-            # Time-series numeric fields (Deforestation, Degradation, Fire, Loss)
-            *[(f"TMF_def_{year}", QVariant.Double) for year in range(2000, 2025)],
-            *[(f"TMF_deg_{year}", QVariant.Double) for year in range(2000, 2025)],
-            *[(f"GFC_loss_year_{year}", QVariant.Double) for year in range(2001, 2024)],
-            *[(f"RADD_year_{year}", QVariant.Double) for year in range(2019, 2026)],
-            *[(f"ESA_fire_{year}", QVariant.Double) for year in range(2001, 2021)],
-            *[(f"MODIS_fire_{year}", QVariant.Double) for year in range(2000, 2025)],
-            # Aggregate past/future impact
-            ("TMF_deg_before_2020", QVariant.Double), ("TMF_def_before_2020", QVariant.Double),
-            ("GFC_loss_before_2020", QVariant.Double), ("ESA_fire_before_2020", QVariant.Double),
-            ("MODIS_fire_before_2020", QVariant.Double), ("RADD_before_2020", QVariant.Double),
-            ("TMF_deg_after_2020", QVariant.Double), ("TMF_def_after_2020", QVariant.Double),
-            ("GFC_loss_after_2020", QVariant.Double), ("MODIS_fire_after_2020", QVariant.Double),
-            ("RADD_after_2020", QVariant.Double),
-            # String fields (categorical data)
-            ("geoid", QVariant.String), ("Geometry_type", QVariant.String), ("Country", QVariant.String),
-            ("Admin_Level_1", QVariant.String), ("Unit", QVariant.String), ("In_waterbody", QVariant.String),
-            ("Indicator_1_treecover", QVariant.String), ("Indicator_2_commodities", QVariant.String),
-            ("Indicator_3_disturbance_before_2020", QVariant.String), ("Indicator_4_disturbance_after_2020", QVariant.String),
-            ("EUDR_risk", QVariant.String)
-        ]
 
-        existing_fields = {field.name(): field.type() for field in layer.fields()}  # Dictionary of existing fields
+
+
+    def ensure_required_fields(self, layer, selected_columns):
         new_fields_added = False
-
         if not layer.isEditable():
             layer.startEditing()
-
-        for field_name, field_type in required_fields:
-            if field_name not in existing_fields:
-                QgsMessageLog.logMessage(f"Adding new field: {field_name} (Type: {field_type})", "WhispAnalysis", Qgis.Info)
-                layer.addAttribute(QgsField(field_name, field_type))
-                new_fields_added = True
-
+        
+        for field_name, type_str in self.whisp_columns_mapping.items():
+            # Only add the field if it's one of the user-selected columns.
+            if field_name in selected_columns:
+                if field_name not in [field.name() for field in layer.fields()]:
+                    if type_str == "int":
+                        field_type = QVariant.Int
+                    elif type_str == "double":
+                        field_type = QVariant.Double
+                    else:
+                        field_type = QVariant.String
+                    QgsMessageLog.logMessage(f"Adding new field: {field_name} (Type: {field_type})",
+                                            "WhispAnalysis", Qgis.Info)
+                    layer.addAttribute(QgsField(field_name, field_type))
+                    new_fields_added = True
+        
         if new_fields_added:
             layer.commitChanges()
             layer.startEditing()
-            QgsMessageLog.logMessage("Committed new fields before API call.", "WhispAnalysis", Qgis.Info)
+            QgsMessageLog.logMessage("Committed new fields before API call.",
+                                    "WhispAnalysis", Qgis.Info)
+
+
+
+
+
+    def convert_to_epsg4326(self, layer):
+        """Convert the selected layer to EPSG:4326 if it has a different CRS."""
+        if not layer:
+            QgsMessageLog.logMessage("No layer selected.", "WhispAnalysis", Qgis.Warning)
+            return None
+
+        source_crs = layer.crs()  # Get the current CRS
+        target_crs = QgsCoordinateReferenceSystem("EPSG:4326")  # Define target CRS
+
+        if source_crs.authid() != target_crs.authid():
+            # Show a dialog informing the user.
+            msg = ("Your input geometry is in CRS {}. Please be aware that the output file "
+                "will be in WGS84 (EPSG:4326).").format(source_crs.authid())
+            QMessageBox.information(self.iface.mainWindow(), "CRS Conversion", msg)
+
+            QgsMessageLog.logMessage(f"Reprojecting layer from {source_crs.authid()} to EPSG:4326...", "WhispAnalysis", Qgis.Info)
+
+            # Create a new memory layer with the same geometry type.
+            # (Adjust the geometry type as needed; here we assume Polygon.)
+            layer_name = layer.name() + " (EPSG:4326)"
+            reprojected_layer = QgsVectorLayer("Polygon?crs=EPSG:4326", layer_name, "memory")
+
+            # Copy fields from the original layer.
+            reprojected_layer_data_provider = reprojected_layer.dataProvider()
+            reprojected_layer_data_provider.addAttributes(layer.fields())
+            reprojected_layer.updateFields()
+
+            # Set up the coordinate transformation.
+            transform = QgsCoordinateTransform(source_crs, target_crs, QgsProject.instance())
+
+            reprojected_layer.startEditing()
+            for feature in layer.getFeatures():
+                new_feature = QgsFeature()
+                new_feature.setAttributes(feature.attributes())
+                geom = feature.geometry()
+                geom.transform(transform)
+                new_feature.setGeometry(geom)
+                reprojected_layer_data_provider.addFeature(new_feature)
+            reprojected_layer.commitChanges()
+
+            QgsMessageLog.logMessage("Layer reprojected to EPSG:4326 successfully!", "WhispAnalysis", Qgis.Info)
+            # Do not add the reprojected layer to the project; it remains in memory.
+            return reprojected_layer
+
+        else:
+            QgsMessageLog.logMessage("Layer is already in EPSG:4326.", "WhispAnalysis", Qgis.Info)
+            return layer
+
+
+
 
 
 
     def get_selected_layer_as_geojson(self, layer):
-        """Export the selected layer as GeoJSON, ensuring a 'plotId' field exists."""
+        """Convert selected layer to EPSG:4326 if necessary and export it as GeoJSON, ensuring a 'plotId' field exists."""
+        
+        # Convert CRS to EPSG:4326 if needed
+        layer = self.convert_to_epsg4326(layer)
+
+        # Ensure 'plotId' field exists
         if "plotId" not in [field.name() for field in layer.fields()]:
             QgsMessageLog.logMessage("Adding 'plotId' field before export.", "WhispAnalysis", Qgis.Info)
             layer.startEditing()
-            layer.addAttribute(QgsField("plotId", QVariant.String))
+            layer.addAttribute(QgsField("plotId", QVariant.Int))
             layer.commitChanges()
             layer.startEditing()
 
         QgsMessageLog.logMessage("Populating 'plotId' values.", "WhispAnalysis", Qgis.Info)
         layer.startEditing()
         for index, feature in enumerate(layer.getFeatures(), start=1):
-            feature["plotId"] = str(index)
+            feature["plotId"] = index  # Store as integer
             QgsMessageLog.logMessage(f"Assigned plotId {index} to feature ID {feature.id()}", "WhispAnalysis", Qgis.Info)
             layer.updateFeature(feature)
         layer.commitChanges()
@@ -256,6 +873,7 @@ class whisp_analysis:
             ],
         }
         return geojson
+
 
 
     def submit_geojson(self, geojson):
@@ -304,24 +922,33 @@ class whisp_analysis:
 
                     for key, value in row.items():
                         if key in field_types:  # Ensure the field exists
-                            if field_types[key] == QVariant.Double:  # If it's a numeric field
+                            if field_types[key] == QVariant.Double:  # Numeric field expected
                                 try:
-                                    if key in ["Centroid_lon", "Centroid_lat"]:  # Round to 6 decimals for these fields
-                                        feature[key] = round(float(value), 6)
-                                    else:  # Default to 3 decimal places for other numeric fields
-                                        feature[key] = round(float(value), 3)
-                                except ValueError:
-                                    QgsMessageLog.logMessage(f"Failed to convert {value} to number for {key}", "WhispAnalysis", Qgis.Warning)
-                            elif field_types[key] == QVariant.Int:  # Convert plotId to integer
+                                    if isinstance(value, dict):
+                                        QgsMessageLog.logMessage(f"Value for field {key} is a dict; converting to string.", "WhispAnalysis", Qgis.Warning)
+                                        feature[key] = str(value)
+                                    else:
+                                        value_float = float(value)
+                                        # If the field is "Area" and the value is 0.01 or smaller, assign NULL.
+                                        if key == "Area" and value_float <= 0.01:
+                                            feature[key] = None
+                                        else:
+                                            if key in ["Centroid_lon", "Centroid_lat"]:
+                                                feature[key] = round(value_float, 6)
+                                            else:
+                                                feature[key] = round(value_float, 3)
+                                except (ValueError, TypeError) as e:
+                                    QgsMessageLog.logMessage(f"Failed to convert {value} for {key}: {e}", "WhispAnalysis", Qgis.Warning)
+                            elif field_types[key] == QVariant.Int:  # Integer field expected
                                 try:
                                     feature[key] = int(value)
-                                except ValueError:
-                                    QgsMessageLog.logMessage(f"Failed to convert {value} to integer for {key}", "WhispAnalysis", Qgis.Warning)
+                                except (ValueError, TypeError) as e:
+                                    QgsMessageLog.logMessage(f"Failed to convert {value} to integer for {key}: {e}", "WhispAnalysis", Qgis.Warning)
                             else:
-                                feature[key] = str(value)  # Keep as string for non-numeric fields
+                                feature[key] = str(value)  # For non-numeric fields, just store as string
 
                     layer.updateFeature(feature)
-                    break  # Stop searching once matched
+                    break  # Stop searching once a match is found
 
             if not matched:
                 QgsMessageLog.logMessage(f"No match found for feature {feature.id()}", "WhispAnalysis", Qgis.Warning)
@@ -329,6 +956,8 @@ class whisp_analysis:
         layer.commitChanges()
         layer.triggerRepaint()
         QgsMessageLog.logMessage("Layer updated with API data.", "WhispAnalysis", Qgis.Info)
+
+
 
 
 

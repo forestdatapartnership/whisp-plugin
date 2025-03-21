@@ -3,17 +3,19 @@
 # This file should be included when you package your plugin.# Mandatory items:
 
 [general]
-name=whisp_analysis
+name=Whisp
 qgisMinimumVersion=3.0
-description=This plugin analyzes your geometries for deforestation risk through the OpenForis Whisp API
+description=Analyze your geometries for deforestation risk through the OpenForis Whisp API
 version=0.1
 author=Jonas Spekker/FAO
-email=j.spkr92@gmail.com
+email=jospek.dev@gmail.com
 
-about=With this plugin you can "whisp" your geometries to check them for deforestation risk based on a multitude of freely available global layers (Convergence of Evidence approach).
+about=With this plugin you can "whisp" your geometries to check them for deforestation risk based on multiple freely available global layers (Convergence of Evidence approach).
 
-tracker=http://bugs
-repository=https://github.com/jo-spek/whisp-analysis
+tracker=https://github.com/forestdatapartnership/whisp-plugin/issues
+repository=https://github.com/forestdatapartnership/whisp-plugin
+license=MIT
+website=https://openforis.org/solutions/whisp/
 # End of mandatory metadata
 
 # Recommended items:
@@ -23,13 +25,13 @@ hasProcessingProvider=no
 # changelog=
 
 # Tags are comma separated with spaces allowed
-tags=python
+#tags=python, API, deforestation, risk analysis
 
 homepage=https://openforis.org/solutions/whisp
 category=Plugins
 icon=icon.png
 # experimental flag
-experimental=False
+experimental=True
 
 # deprecated flag (applies to the whole plugin, not just a single version)
 deprecated=False
