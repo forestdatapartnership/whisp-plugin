@@ -43,10 +43,6 @@ from PyQt5.QtCore import QVariant, QThread, pyqtSignal, QObject, Qt, QTimer
 
 
 
-
-
-
-
 class InitializationDialog(QDialog):
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -233,8 +229,8 @@ class LayerSelectionDialog(QDialog):
                 msgBox.setWindowTitle("CRS Conversion Warning")
                 # Build HTML message with extra spacing and bold/italic for the CRS information.
                 msg = (
-                    f"<p>Your input geometry is in <b>{source_crs_str}</b>.</p>"
-                    f"<p>The output will be in <b>EPSG:4326 - WGS84</b>.</p>"
+                    f"<p>Your input file's CRS is <b>{source_crs_str}</b>.</p>"
+                    f"<p>The output will be in CRS <b>EPSG:4326 - WGS84</b>.</p>"
                     f"<p>Do you wish to proceed?</p>"
                 )
                 msgBox.setTextFormat(Qt.RichText)
@@ -574,7 +570,47 @@ class whisp_analysis:
             self.iface.removeToolBarIcon(action)
             self.iface.removePluginMenu(self.menu, action)
 
-    
+    def export_layer_with_properties(self, layer):
+        """
+        Export the given layer to a temporary GeoJSON file, ensuring that every feature
+        has a "properties" key (even if empty). Returns the temporary file path.
+        """
+        features = []
+        # Loop over each feature, building a feature dictionary.
+        for feature in layer.getFeatures():
+            geom_json = feature.geometry().asJson()
+            try:
+                geom_obj = json.loads(geom_json)
+            except Exception as e:
+                QgsMessageLog.logMessage(f"Error parsing geometry for feature {feature.id()}: {e}", "WhispAnalysis", Qgis.Warning)
+                continue
+
+            # Build a properties dictionary.
+            # If the layer has fields, copy the attribute values; otherwise, use an empty dict.
+            if layer.fields().count() > 0:
+                properties = {field.name(): feature[field.name()] for field in layer.fields()}
+            else:
+                properties = {}
+            # Ensure that at least a "plotId" is present (it might be added later, but we ensure the key exists)
+            if "plotId" not in properties:
+                properties["plotId"] = None
+
+            features.append({
+                "type": "Feature",
+                "geometry": geom_obj,
+                "properties": properties
+            })
+        fc = {
+            "type": "FeatureCollection",
+            "features": features
+        }
+        import tempfile
+        temp_file = tempfile.NamedTemporaryFile(delete=False, suffix=".geojson")
+        with open(temp_file.name, "w", encoding="utf-8") as f:
+            json.dump(fc, f)
+        QgsMessageLog.logMessage(f"Exported temporary GeoJSON with properties: {temp_file.name}", "WhispAnalysis", Qgis.Info)
+        return temp_file.name
+
     
     def on_submit_geojson(self):
         # Trigger initialization if it hasn't been done yet.
@@ -591,17 +627,28 @@ class whisp_analysis:
                                     "WhispAnalysis", Qgis.Warning)
             return
 
-        # Reproject the input layer to EPSG:4326
+        # *** STEP 1: Immediately convert the input layer to EPSG:4326 ***
         input_layer = self.convert_to_epsg4326(input_layer)
 
-        # Check if the input layer is already fully whisped
+        # *** STEP 2: Force normalization if the layer's attribute schema is empty.
+        # (Even if the layer reports fields, check if the attributes are effectively empty.)
+        features = list(input_layer.getFeatures())
+        if input_layer.fields().count() == 0 or (features and len(features[0].attributes()) == 0):
+            QgsMessageLog.logMessage("Normalizing layer: exporting to temporary GeoJSON with properties.", "WhispAnalysis", Qgis.Info)
+            temp_geojson_path = self.export_layer_with_properties(input_layer)
+            input_layer = QgsVectorLayer(temp_geojson_path, "TempLayer", "ogr")
+            if not input_layer.isValid():
+                QgsMessageLog.logMessage("Failed to load temporary layer with properties.", "WhispAnalysis", Qgis.Critical)
+                return
+
+        # Continue with the rest of the processing:
+        # Check if the input layer is already fully whisped.
         existing_whisp_fields = set(field.name() for field in input_layer.fields()).intersection(set(self.whisp_columns_mapping.keys()))
         if len(existing_whisp_fields) == len(self.whisp_columns_mapping):
             QgsMessageLog.logMessage("Input layer already contains all Whisp fields. Creating a clean copy for re‑whisping.", "WhispAnalysis", Qgis.Info)
             input_layer = self.create_clean_layer(input_layer)
 
-
-        # Process the output file name:
+        # Process the output file name.
         import os
         if not os.path.isabs(output_file):
             input_source = input_layer.source()
