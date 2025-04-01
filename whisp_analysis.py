@@ -7,12 +7,26 @@
  ***************************************************************************/
 """
 
+def is_connected(url="https://whisp.openforis.org", timeout=5):
+    """
+    Checks if a connection to the given URL can be established within the specified timeout.
+    Returns True if successful, otherwise False.
+    """
+    try:
+        import requests
+        requests.get(url, timeout=timeout)
+        return True
+    except Exception:
+        return False
+
+
 import subprocess
 import sys
 import os
 import requests
 import json
 import tempfile
+import math
 
 def check_and_install(package):
     """Check if a package is installed, and install it if not."""
@@ -30,7 +44,7 @@ from PyQt5.QtWidgets import (
 )
 
 
-from qgis.core import QgsProject, QgsMapLayer, QgsVectorFileWriter, QgsVectorLayer, QgsMessageLog, Qgis, QgsField, QgsCoordinateReferenceSystem, QgsCoordinateTransform, QgsFeature
+from qgis.core import QgsProject, QgsMapLayer, QgsVectorFileWriter, QgsVectorLayer, QgsMessageLog, Qgis, QgsField, QgsCoordinateReferenceSystem, QgsCoordinateTransform, QgsFeature, QgsWkbTypes
 from qgis.PyQt.QtCore import QThread, pyqtSignal, QObject, QSettings, QTranslator, QCoreApplication, QVariant
 
 from qgis.PyQt.QtGui import QIcon, QPixmap
@@ -62,11 +76,18 @@ class InitializationWorker(QObject):
     progress = pyqtSignal(str)
 
     def run(self):
-        #self.progress.emit("Sending test geometry to Whisp API...")
+        # Check connectivity.
+        if not is_connected("https://whisp.openforis.org", timeout=5):
+            error_msg = "Can't connect to Whisp API. \n\nMissing internet connection or port issue. \n\nMake sure to be connected and that port 443 can be accessed."
+            self.progress.emit(error_msg)
+            self.finished.emit({"error": error_msg})
+            return
+
+        # Proceed with test geometry API call.
         test_geojson = {
             "type": "FeatureCollection",
             "features": [
-                {"type": "Feature", "geometry": {"type": "Point", "coordinates": [0, 0]}, "properties": {}}
+                {"type": "Feature", "geometry": {"type": "Point", "coordinates": [0, 0]}, "properties": {}} #Sends a point at 0°N/S and 0°E/W to retrieve Whisp columns currently available.
             ]
         }
         url = "https://whisp.openforis.org/api/geojson"
@@ -88,6 +109,8 @@ class InitializationWorker(QObject):
 
 
 
+
+
 class LayerSelectionDialog(QDialog):
     def __init__(self, columns_mapping, parent=None, default_layer=None):
         super().__init__(parent)
@@ -103,7 +126,7 @@ class LayerSelectionDialog(QDialog):
         textLayout = QVBoxLayout()
         titleLabel = QLabel("Whisp")
         font = titleLabel.font()
-        font.setPointSize(font.pointSize() * 2)  # Double the current font size.
+        font.setPointSize(font.pointSize() * 2)
         font.setBold(True)
         titleLabel.setFont(font)
         descriptionLabel = QLabel("Analyze your geometries for deforestation risk through the OpenForis Whisp API and output them as GeoJSON.")
@@ -215,9 +238,19 @@ class LayerSelectionDialog(QDialog):
         self.updateOkButtonState()
         self.applyCustomStyleSheet()
 
-    def accept(self):
 
-        # First, check CRS of the selected input layer.
+
+    def accept(self):
+        # First, check internet connectivity.
+        if not is_connected("https://whisp.openforis.org", timeout=5):
+            msgBox = QMessageBox(self)
+            msgBox.setIcon(QMessageBox.Critical)
+            msgBox.setWindowTitle("Connectivity Error")
+            msgBox.setText("No internet connectivity detected.\nPlease check your network settings and try again.")
+            msgBox.exec_()
+            return
+
+        # Next, check CRS of the selected input layer.
         input_layer = self.inputCombo.currentData()
         if input_layer:
             source_crs = input_layer.crs()
@@ -227,7 +260,7 @@ class LayerSelectionDialog(QDialog):
                 msgBox = QMessageBox(self)
                 msgBox.setIcon(QMessageBox.Warning)
                 msgBox.setWindowTitle("CRS Conversion Warning")
-                # Build HTML message with extra spacing and bold/italic for the CRS information.
+                # Build HTML message with extra spacing and bold formatting for the CRS information.
                 msg = (
                     f"<p>Your input file's CRS is <b>{source_crs_str}</b>.</p>"
                     f"<p>The output will be in CRS <b>EPSG:4326 - WGS84</b>.</p>"
@@ -243,7 +276,7 @@ class LayerSelectionDialog(QDialog):
                     # User cancelled the CRS warning; keep the dialog open.
                     return
 
-        # Only prompt if we haven't already confirmed re‑whisp.
+        # Perform a re‑whisp check.
         if not getattr(self, 'allow_rewhisp', False):
             analysis_fields = set(self.columns_mapping.keys())
             input_layer = self.inputCombo.currentData()
@@ -265,19 +298,14 @@ class LayerSelectionDialog(QDialog):
                 else:
                     # User chose to re‑whisp.
                     self.allow_rewhisp = True
-                    # Disconnect the accepted signal so it doesn’t trigger the prompt again.
                     try:
                         self.buttonBox.accepted.disconnect(self.accept)
-                    except Exception as e:
-                        # In case it wasn’t connected or already disconnected.
+                    except Exception:
                         pass
                     super().accept()
                     return
-        # If already allowed or the check doesn't apply, accept normally.
+        # If all checks pass, accept normally.
         super().accept()
-
-
-
 
 
 
@@ -407,7 +435,7 @@ class LayerSelectionDialog(QDialog):
             checkbox.setChecked(True)
 
     def selectEUDRRelevant(self):
-        # Adjust these names if needed (e.g., use "Plot_area_ha" instead of "Area").
+        # ADJUST THESE NAMES IF NEEDED IN PLUGIN-UPDATE!
         for col, checkbox in self.checkboxes.items():
             if col in {"Area", "ProducerCountry", "EUDR_risk"}:
                 checkbox.setChecked(True)
@@ -437,11 +465,15 @@ class WhispWorker(QObject):
         self.geojson = geojson
 
     def run(self):
-        """Perform the API request in a separate thread."""
+        if not is_connected("https://whisp.openforis.org", timeout=5):
+            error_msg = "No internet connectivity. Please check your network settings."
+            self.progress.emit(error_msg)
+            self.finished.emit({"error": error_msg})
+            return
+
         self.progress.emit("Sending request to Whisp API...")
         url = "https://whisp.openforis.org/api/geojson"
         headers = {"Content-Type": "application/json"}
-
         try:
             response = requests.post(url, json=self.geojson, headers=headers)
             if response.status_code == 200:
@@ -461,8 +493,9 @@ class WhispWorker(QObject):
 
 
 
+
 class whisp_analysis:
-    """QGIS Plugin Implementation."""
+    """Main plugin implementation code."""
 
     def __init__(self, iface):
         """Constructor."""
@@ -471,7 +504,7 @@ class whisp_analysis:
         self.actions = []
         self.menu = self.tr(u"&Whisp Analysis")
         self.first_start = None
-        self.whisp_columns_file = None  # This will store the path to our temp file
+        self.whisp_columns_file = None  # Store path to temp file
 
     def tr(self, message):
         """Translate a string."""
@@ -506,11 +539,11 @@ class whisp_analysis:
 
     def initialize_whisp_columns(self):
         init_dialog = InitializationDialog(self.iface.mainWindow())
-        # Set up the progress bar as a percentage bar.
+        # Set up progress bar as percentage bar.
         init_dialog.progress_bar.setRange(0, 100)
         init_dialog.progress_bar.setValue(0)
 
-        # Create a timer that will increment the progress bar value.
+        # Create timer to increment progress bar value.
         timer = QTimer(init_dialog)
         timer.setInterval(100)  # 100 ms intervals -> 100 steps for 10 seconds.
         timer.timeout.connect(lambda: init_dialog.progress_bar.setValue(
@@ -522,7 +555,7 @@ class whisp_analysis:
         worker.moveToThread(thread)
 
         def on_worker_finished(result):
-            timer.stop()  # Stop the progress timer.
+            timer.stop()  # Stop progress timer.
             init_dialog.progress_bar.setValue(100)
             self.on_initialization_finished(result, init_dialog)
 
@@ -539,29 +572,32 @@ class whisp_analysis:
 
 
     def on_initialization_finished(self, result, dialog):
-        if "error" not in result:
-            if "data" in result and result["data"]:
-                first_row = result["data"][0]
-                mapping = {}
-                for key, value in first_row.items():
-                    if key == "plotId":
-                        mapping[key] = "int"
-                    # Treat any numeric value as double regardless if it's an int or a float.
-                    elif isinstance(value, (int, float)):
-                        mapping[key] = "double"
-                    else:
-                        mapping[key] = "string"
-                self.whisp_columns_mapping = mapping
-                QgsMessageLog.logMessage(
-                    f"Whisp columns mapping: {self.whisp_columns_mapping}",
-                    "WhispAnalysis", Qgis.Info)
-        else:
-            QgsMessageLog.logMessage("Initialization error: " + result["error"],
-                                    "WhispAnalysis", Qgis.Warning)
-        dialog.accept()
+        # Stop progress timer and set progress bar to 100%
+        dialog.progress_bar.setValue(100)
+        
+        # If there's an error, close the initialization dialog first.
+        if "error" in result:
+            dialog.reject()  # or dialog.close()
+            QMessageBox.critical(self.iface.mainWindow(), "Initialization Error", result["error"])
+            return
 
+        # Otherwise, process normally:
+        if "data" in result and result["data"]:
+            first_row = result["data"][0]
+            mapping = {}
+            for key, value in first_row.items():
+                if key == "plotId":
+                    mapping[key] = "int"
+                elif isinstance(value, (int, float)):
+                    mapping[key] = "double"
+                else:
+                    mapping[key] = "string"
+            self.whisp_columns_mapping = mapping
+            QgsMessageLog.logMessage(
+                f"Whisp columns mapping: {self.whisp_columns_mapping}",
+                "WhispAnalysis", Qgis.Info)
+        dialog.accept() 
 
-    
 
 
     def unload(self):
@@ -585,13 +621,12 @@ class whisp_analysis:
                 QgsMessageLog.logMessage(f"Error parsing geometry for feature {feature.id()}: {e}", "WhispAnalysis", Qgis.Warning)
                 continue
 
-            # Build a properties dictionary.
-            # If the layer has fields, copy the attribute values; otherwise, use an empty dict.
+            # Build a properties dictionary. If the layer has fields, copy the attribute values; otherwise, use an empty dict.
             if layer.fields().count() > 0:
                 properties = {field.name(): feature[field.name()] for field in layer.fields()}
             else:
                 properties = {}
-            # Ensure that at least a "plotId" is present (it might be added later, but we ensure the key exists)
+            # Ensure that at least a "plotId" is present (might be added later, but ensure the key exists)
             if "plotId" not in properties:
                 properties["plotId"] = None
 
@@ -604,7 +639,6 @@ class whisp_analysis:
             "type": "FeatureCollection",
             "features": features
         }
-        import tempfile
         temp_file = tempfile.NamedTemporaryFile(delete=False, suffix=".geojson")
         with open(temp_file.name, "w", encoding="utf-8") as f:
             json.dump(fc, f)
@@ -613,10 +647,25 @@ class whisp_analysis:
 
     
     def on_submit_geojson(self):
-        # Trigger initialization if it hasn't been done yet.
+        # First, check connectivity.
+        if not is_connected("https://whisp.openforis.org", timeout=5):
+            QMessageBox.critical(self.iface.mainWindow(),
+                "Connectivity Error",
+                "No internet connectivity detected. Please check your network settings and try again.")
+            return
+
+        # If the column mapping isn't set or is empty, trigger initialization.
         if not hasattr(self, 'whisp_columns_mapping') or not self.whisp_columns_mapping:
             self.initialize_whisp_columns()
+            # Because initialize_whisp_columns() opens a modal dialog (exec_()),
+            # it will block until initialization is complete.
+            if not self.whisp_columns_mapping:
+                QMessageBox.critical(self.iface.mainWindow(),
+                    "Initialization Error",
+                    "Initialization failed. Please check your connectivity and try again.")
+                return
 
+        # Show the main layer selection dialog.
         dialog = LayerSelectionDialog(self.whisp_columns_mapping, self.iface.mainWindow(), self.iface.activeLayer())
         if not dialog.exec_():
             return
@@ -641,7 +690,6 @@ class whisp_analysis:
                 QgsMessageLog.logMessage("Failed to load temporary layer with properties.", "WhispAnalysis", Qgis.Critical)
                 return
 
-        # Continue with the rest of the processing:
         # Check if the input layer is already fully whisped.
         existing_whisp_fields = set(field.name() for field in input_layer.fields()).intersection(set(self.whisp_columns_mapping.keys()))
         if len(existing_whisp_fields) == len(self.whisp_columns_mapping):
@@ -649,7 +697,6 @@ class whisp_analysis:
             input_layer = self.create_clean_layer(input_layer)
 
         # Process the output file name.
-        import os
         if not os.path.isabs(output_file):
             input_source = input_layer.source()
             input_dir = os.path.dirname(input_source) if input_source else ""
@@ -672,7 +719,7 @@ class whisp_analysis:
             input_layer.updateFeature(feature)
         input_layer.commitChanges()
 
-        # Now create the output layer.
+        # Create the output layer.
         output_layer = self.createNewOutputLayer(input_layer, output_file)
         if output_layer is None:
             QgsMessageLog.logMessage("Failed to create new output layer.", "WhispAnalysis", Qgis.Critical)
@@ -696,7 +743,6 @@ class whisp_analysis:
         proc_layout.addWidget(progress_label)
         progress_bar = QProgressBar()
 
-        import math
         num_features = input_layer.featureCount()
         # Total time = 10 sec (10000ms) plus 10ms per feature.
         total_time_ms = 10000 + (num_features * 10)
@@ -724,7 +770,7 @@ class whisp_analysis:
         timer.timeout.connect(lambda: progress_bar.setValue(min(progress_bar.value() + 1, ticks)))
         timer.start()
 
-        # Initialize a cancellation flag.
+        # Initialize cancellation flag.
         self.cancelled = False
 
         def cancel_operation():
@@ -770,13 +816,6 @@ class whisp_analysis:
 
 
 
-
-
-
-
-
-    
-
     def createNewOutputLayer(self, input_layer, output_file):
         """
         Create a new vector layer for output using the input layer's settings.
@@ -813,7 +852,6 @@ class whisp_analysis:
         original_fields = [field for field in input_layer.fields() if field.name() not in self.whisp_columns_mapping]
         
         # Convert the input layer's WKB type to a geometry type string.
-        from qgis.core import QgsWkbTypes
         geom_type_str = QgsWkbTypes.displayString(input_layer.wkbType())
         crs = input_layer.crs().authid()
         
@@ -825,7 +863,7 @@ class whisp_analysis:
             QgsMessageLog.logMessage("Clean layer failed to initialize", "WhispAnalysis", Qgis.Critical)
             return None
         
-        # Add only the original fields to the new layer.
+        # Add only original fields to the new layer.
         dp = clean_layer.dataProvider()
         dp.addAttributes(original_fields)
         clean_layer.updateFields()
@@ -917,7 +955,6 @@ class whisp_analysis:
             QgsMessageLog.logMessage(f"Reprojecting layer from {source_crs.authid()} to EPSG:4326...", "WhispAnalysis", Qgis.Info)
 
             # Determine the geometry type dynamically.
-            from qgis.core import QgsWkbTypes
             geom_type_str = QgsWkbTypes.displayString(layer.wkbType())
             layer_name = layer.name() + " (EPSG:4326)"
             reprojected_layer = QgsVectorLayer(f"{geom_type_str}?crs=EPSG:4326", layer_name, "memory")
@@ -1046,7 +1083,7 @@ class whisp_analysis:
                                         feature[key] = str(value)
                                     else:
                                         value_float = float(value)
-                                        # If the field is "Area" and the value is 0.01 or smaller, assign NULL.
+                                        # Whisp API returns Area for points. If the value is 0.01 or smaller, assign NULL.
                                         if key == "Area" and value_float <= 0.01:
                                             feature[key] = None
                                         else:
