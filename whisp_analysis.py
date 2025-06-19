@@ -297,6 +297,40 @@ class LayerSelectionDialog(QDialog):
             msgBox.setText("Can't connect to Whisp API. \n\nMissing internet connection or port issue. \n\nMake sure to be connected and that port 443 can be accessed.")
             msgBox.exec_()
             return
+        
+        # 0) Abort on mixed GeoJSON geometry types right away
+        input_layer = self.inputCombo.currentData()
+        if input_layer and input_layer.providerType() == "ogr":
+            uri = input_layer.dataProvider().dataSourceUri()
+            path = uri.split("|")[0]
+            try:
+                import json
+                with open(path, "r", encoding="utf-8") as f:
+                    gj = json.load(f)
+                geom_types = {
+                    feat.get("geometry", {}).get("type")
+                    for feat in gj.get("features", [])
+                }
+            except Exception as e:
+                QgsMessageLog.logMessage(
+                    f"Could not inspect GeoJSON: {e}",
+                    "WhispAnalysis", Qgis.Warning
+                )
+            else:
+                pts  = {"Point", "MultiPoint"}
+                polys = {"Polygon", "MultiPolygon"}
+                if geom_types & pts and geom_types & polys:
+                    dlg = QMessageBox(self)
+                    dlg.setIcon(QMessageBox.Warning)
+                    dlg.setWindowTitle("Unsupported Mixed Geometry")
+                    dlg.setText(
+                        "This GeoJSON contains both Point and Polygon features.\n\n"
+                        "QGIS can not process such files.\n\n"
+                        "Please add the file directly to QGIS to split into separate layers."
+                    )
+                    dlg.setStandardButtons(QMessageBox.Ok)
+                    dlg.exec_()
+                    return
 
         # Next, check CRS of the selected input layer.
         input_layer = self.inputCombo.currentData()
@@ -379,10 +413,10 @@ class LayerSelectionDialog(QDialog):
                     reply.setWindowTitle("Warning")
                     reply.setText(
                         "Whisp API does not support MultiPoint / MultiPolygon features.\n"
-                        "Do you want to split the multi-features into single features to continue?"
+                        "Multi-features will be split into single features for the analysis."
                     )
                     reply.setStandardButtons(QMessageBox.Ok | QMessageBox.Cancel)
-                    reply.button(QMessageBox.Ok).setText("Continue")
+                    reply.button(QMessageBox.Ok).setText("OK")
                     reply.button(QMessageBox.Cancel).setText("Cancel")
                     reply.setDefaultButton(reply.button(QMessageBox.Cancel))
                     if reply.exec_() != QMessageBox.Ok:
@@ -1090,7 +1124,7 @@ class whisp_analysis:
             QgsMessageLog.logMessage("Invalid selection. Ensure an input layer, output file, and at least one column are selected.",
                                     "WhispAnalysis", Qgis.Warning)
             return
-
+        
         # Immediately convert the input layer to EPSG:4326
         input_layer = self.convert_to_epsg4326(input_layer)
 
