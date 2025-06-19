@@ -72,11 +72,11 @@ check_and_install("requests")
 
 from PyQt5.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QComboBox, QLabel, QRadioButton, QApplication,
-    QLineEdit, QPushButton, QDialogButtonBox, QFileDialog, QProgressBar, QScrollArea, QWidget, QCheckBox
+    QLineEdit, QPushButton, QDialogButtonBox, QFileDialog, QProgressBar, QScrollArea, QWidget, QCheckBox, QMessageBox
 )
 
-
-from qgis.core import QgsProject, QgsMapLayer, QgsVectorFileWriter, QgsVectorLayer, QgsMessageLog, Qgis, QgsField, QgsCoordinateReferenceSystem, QgsCoordinateTransform, QgsFeature, QgsWkbTypes, QgsDistanceArea
+from qgis import processing
+from qgis.core import QgsProject, QgsMapLayer, QgsVectorFileWriter, QgsVectorLayer, QgsMessageLog, Qgis, QgsField, QgsCoordinateReferenceSystem, QgsCoordinateTransform, QgsFeature, QgsWkbTypes, QgsDistanceArea, QgsGeometry, QgsPointXY, QgsFields
 from qgis.PyQt.QtCore import QThread, pyqtSignal, QObject, QSettings, QTranslator, QCoreApplication, QVariant, Qt
 
 from qgis.PyQt.QtGui import QIcon, QPixmap
@@ -265,14 +265,14 @@ class LayerSelectionDialog(QDialog):
         btnLayout = QHBoxLayout()
         self.btnDeselectAll = QPushButton("Deselect all")
         self.btnSelectAll = QPushButton("Select all")
-        self.btnSelectEUDR = QPushButton("Reduced Selection")
+        # self.btnSelectEUDR = QPushButton("Reduced Selection")
         btnLayout.addWidget(self.btnDeselectAll)
         btnLayout.addWidget(self.btnSelectAll)
-        btnLayout.addWidget(self.btnSelectEUDR)
+        # btnLayout.addWidget(self.btnSelectEUDR)
         layout.addLayout(btnLayout)
         self.btnDeselectAll.clicked.connect(self.deselectAll)
         self.btnSelectAll.clicked.connect(self.selectAll)
-        self.btnSelectEUDR.clicked.connect(self.selectEUDRRelevant)
+        # self.btnSelectEUDR.clicked.connect(self.selectEUDRRelevant)
 
         # Dialog Buttons (OK/Cancel)
         self.buttonBox = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
@@ -286,6 +286,9 @@ class LayerSelectionDialog(QDialog):
 
 
     def accept(self):
+
+        QgsMessageLog.logMessage(">>> ENTERED LayerSelectionDialog.accept() <<<", "WhispAnalysis", Qgis.Info)
+
         # First, check internet connectivity.
         if not is_connected("https://whisp.openforis.org", timeout=5):
             msgBox = QMessageBox(self)
@@ -320,7 +323,8 @@ class LayerSelectionDialog(QDialog):
                 if msgBox.clickedButton() == cancel_button:
                     # User cancelled the CRS warning; keep the dialog open.
                     return
-
+                
+        
         # Perform a re‑whisp check.
         if not getattr(self, 'allow_rewhisp', False):
             analysis_fields = set(self.columns_mapping.keys())
@@ -349,6 +353,42 @@ class LayerSelectionDialog(QDialog):
                         pass
                     super().accept()
                     return
+                
+        # 4) Multi-geometry warning
+        # -- grab the same layer from the combo each time --
+        input_layer = self.inputCombo.currentData()
+        if input_layer:
+            QgsMessageLog.logMessage(
+                "Checking for MultiPoint/MultiPolygon in accept()…",
+                "WhispAnalysis", Qgis.Info
+            )
+            for feat in input_layer.getFeatures():
+                wkb = feat.geometry().wkbType()
+                QgsMessageLog.logMessage(
+                    f"  Feature WKB → {QgsWkbTypes.displayString(wkb)}",
+                    "WhispAnalysis", Qgis.Info
+                )
+                if (QgsWkbTypes.isMultiType(wkb)
+                    and QgsWkbTypes.geometryType(wkb) in (
+                        QgsWkbTypes.PointGeometry,
+                        QgsWkbTypes.PolygonGeometry
+                    )
+                ):
+                    reply = QMessageBox(self)
+                    reply.setIcon(QMessageBox.Warning)
+                    reply.setWindowTitle("Warning")
+                    reply.setText(
+                        "Whisp API does not support MultiPoint / MultiPolygon features.\n"
+                        "Do you want to split the multi-features into single features to continue?"
+                    )
+                    reply.setStandardButtons(QMessageBox.Ok | QMessageBox.Cancel)
+                    reply.button(QMessageBox.Ok).setText("Continue")
+                    reply.button(QMessageBox.Cancel).setText("Cancel")
+                    reply.setDefaultButton(reply.button(QMessageBox.Cancel))
+                    if reply.exec_() != QMessageBox.Ok:
+                        return
+                    break
+
         # If all checks pass, accept normally.
         super().accept()
 
@@ -805,39 +845,96 @@ class whisp_analysis:
             self.iface.removePluginMenu(self.menu, action)
 
     def export_layer_with_properties(self, layer):
-        # Export the given layer to a temporary GeoJSON file, ensuring that every feature has a "properties" key (even if empty). Returns the temporary file path.
+        """
+        Exports the given layer to a temporary GeoJSON file,
+        flattening multipart geometries into singletons and
+        tagging each feature with unique plotId and extractId.
+        Returns the path to the temp GeoJSON.
+        """
         features = []
-        # Loop over each feature, building a feature dictionary.
+
         for feature in layer.getFeatures():
-            geom_json = feature.geometry().asJson()
-            try:
-                geom_obj = json.loads(geom_json)
-            except Exception as e:
-                QgsMessageLog.logMessage(f"Error parsing geometry for feature {feature.id()}: {e}", "WhispAnalysis", Qgis.Warning)
-                continue
-
-            # Build a properties dictionary. If the layer has fields, copy the attribute values; otherwise, use an empty dict.
+            # 1) Build original properties dict (ensure plotId key)
             if layer.fields().count() > 0:
-                properties = {field.name(): feature[field.name()] for field in layer.fields()}
+                orig_props = {f.name(): feature[f.name()] for f in layer.fields()}
             else:
-                properties = {}
-            # Ensure that at least a "plotId" is present (might be added later, but ensure the key exists)
-            if "plotId" not in properties:
-                properties["plotId"] = None
+                orig_props = {}
+            if "plotId" not in orig_props:
+                orig_props["plotId"] = None
+            orig_id = orig_props["plotId"]
 
-            features.append({
-                "type": "Feature",
-                "geometry": geom_obj,
-                "properties": properties
-            })
+            geom = feature.geometry()
+
+            def make_feature(subgeom, idx):
+                # Convert sub-geometry to GeoJSON geometry dict
+                geom_json = subgeom.asJson()
+                try:
+                    geom_obj = json.loads(geom_json)
+                except Exception as e:
+                    QgsMessageLog.logMessage(
+                        f"Error parsing sub-geometry JSON for plot {orig_id}_{idx}: {e}",
+                        "WhispAnalysis",
+                        Qgis.Warning
+                    )
+                    return None
+
+                # Copy & update properties
+                props = orig_props.copy()
+                props["plotId"] = f"{orig_id}_{idx}"
+                geom_type = QgsWkbTypes.displayString(subgeom.wkbType()).replace("Multi", "")
+                props["extractId"] = f"{geom_type}_{orig_id}_extract_{idx}"
+
+                return {
+                    "type": "Feature",
+                    "geometry": geom_obj,
+                    "properties": props
+                }
+
+            # 2) Flatten multipart vs singlepart
+            if geom.isMultipart():
+                flat_type = QgsWkbTypes.flatType(geom.wkbType())
+                if flat_type == QgsWkbTypes.PolygonGeometry:
+                    parts = geom.asMultiPolygon()
+                    maker = lambda poly: QgsGeometry.fromPolygonXY(poly)
+                elif flat_type == QgsWkbTypes.PointGeometry:
+                    parts = geom.asMultiPoint()
+                    maker = lambda pt: QgsGeometry.fromPointXY(pt)
+                else:
+                    parts = geom.asGeometryCollection()
+                    maker = lambda g: g
+
+                for i, part in enumerate(parts, start=1):
+                    subgeom = maker(part)
+                    feat = make_feature(subgeom, i)
+                    if feat:
+                        features.append(feat)
+            else:
+                single = make_feature(geom, 1)
+                if single:
+                    features.append(single)
+
+        # 3) Dump out FeatureCollection
         fc = {
             "type": "FeatureCollection",
             "features": features
         }
         temp_file = tempfile.NamedTemporaryFile(delete=False, suffix=".geojson")
-        with open(temp_file.name, "w", encoding="utf-8") as f:
-            json.dump(fc, f)
-        QgsMessageLog.logMessage(f"Exported temporary GeoJSON with properties: {temp_file.name}", "WhispAnalysis", Qgis.Info)
+        try:
+            with open(temp_file.name, "w", encoding="utf-8") as f:
+                json.dump(fc, f)
+        except Exception as e:
+            QgsMessageLog.logMessage(
+                f"Failed writing flattened GeoJSON: {e}",
+                "WhispAnalysis",
+                Qgis.Critical
+            )
+            raise
+
+        QgsMessageLog.logMessage(
+            f"Exported flattened GeoJSON: {temp_file.name}",
+            "WhispAnalysis",
+            Qgis.Info
+        )
         return temp_file.name
     
     # def show_terms_of_service(self):
@@ -996,6 +1093,61 @@ class whisp_analysis:
 
         # Immediately convert the input layer to EPSG:4326
         input_layer = self.convert_to_epsg4326(input_layer)
+
+        # ——— Manual flatten + backlink ID ———
+        # 1) Copy original fields into a new QgsFields and add 'link_id'
+        orig_fields = input_layer.fields()
+        fields = QgsFields()
+        for f in orig_fields:
+            fields.append(f)
+        # only add link_id if not already present
+        if 'link_id' not in [f.name() for f in fields]:
+            fields.append(QgsField('link_id', QVariant.String))
+
+        # 2) Create an in-memory layer with those fields
+        mem = QgsVectorLayer(
+            f"{QgsWkbTypes.displayString(input_layer.wkbType())}?crs=EPSG:4326",
+            "flattened",
+            "memory"
+        )
+        mem.dataProvider().addAttributes(fields)
+        mem.updateFields()
+
+        # 3) Iterate, explode and back-link
+        for orig_idx, feat in enumerate(input_layer.getFeatures(), start=1):
+            geom = feat.geometry()
+            wkb = geom.wkbType()
+            # decide how to split
+            if QgsWkbTypes.isMultiType(wkb):
+                flat = QgsWkbTypes.flatType(wkb)
+                if flat == QgsWkbTypes.PolygonGeometry:
+                    parts = geom.asMultiPolygon()
+                    maker = lambda poly: QgsGeometry.fromPolygonXY(poly)
+                elif flat == QgsWkbTypes.PointGeometry:
+                    parts = geom.asMultiPoint()
+                    maker = lambda pt: QgsGeometry.fromPointXY(pt)
+                else:
+                    parts = geom.asGeometryCollection()
+                    maker = lambda g: g
+            else:
+                # single‐part: wrap into a list
+                parts = [geom]
+                maker = lambda g: g
+
+            for part_idx, part in enumerate(parts, start=1):
+                subgeom = maker(part)
+                new_feat = QgsFeature(fields)
+                # copy original attributes + space for link_id
+                attrs = feat.attributes() + [None]
+                new_feat.setAttributes(attrs)
+                new_feat.setGeometry(subgeom)
+                new_feat['link_id'] = f"geom{orig_idx}_feat{part_idx}"
+                mem.dataProvider().addFeatures([new_feat])
+
+        input_layer = mem
+        QgsMessageLog.logMessage("Manual flatten complete; created link_id field.", "WhispAnalysis", Qgis.Info)
+        # ——————————————————————————————
+
 
         # Force normalization if the layer's attribute schema is empty
         # (Even if the layer reports fields, check if the attributes are effectively empty.)
