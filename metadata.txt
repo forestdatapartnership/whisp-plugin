@@ -22,7 +22,7 @@ website=https://openforis.org/solutions/whisp/
 
 hasProcessingProvider=no
 # Uncomment the following line and add your changelog:
-# changelog=
+changelog=https://github.com/forestdatapartnership/whisp-plugin/blob/7b04daeb29e72a2a67cc4f5001648b557097c482/CHANGELOG.md
 
 # Tags are comma separated with spaces allowed
 #tags=python, API, deforestation, risk analysis
@@ -31,7 +31,7 @@ homepage=https://openforis.org/solutions/whisp
 category=Plugins
 icon=icon.png
 # experimental flag
-experimental=True
+experimental=False
 
 # deprecated flag (applies to the whole plugin, not just a single version)
 deprecated=False
