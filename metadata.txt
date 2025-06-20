@@ -6,8 +6,8 @@
 name=Whisp
 qgisMinimumVersion=3.0
 description=Analyze your geometries for deforestation risk through the OpenForis Whisp API
-version=0.1
-author=Jonas Spekker/FAO
+version=1.0
+author=Jonas Spekker (FAO)
 email=jospek.dev@gmail.com
 
 about=With this plugin you can "whisp" your geometries to check them for deforestation risk based on multiple freely available global layers (Convergence of Evidence approach).
@@ -31,7 +31,7 @@ homepage=https://openforis.org/solutions/whisp
 category=Plugins
 icon=icon.png
 # experimental flag
-experimental=True
+experimental=False
 
 # deprecated flag (applies to the whole plugin, not just a single version)
 deprecated=False
