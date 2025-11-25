@@ -89,12 +89,6 @@ from PyQt5.QtCore import QVariant, QThread, pyqtSignal, QObject, Qt, QTimer
 
 
 
-# # ─────────────────────────────────────────────────────────────────────────────
-# # OpenForis Whisp API key (required as of June 2025)
-# API_KEY = "9232ee12-5f84-4b64-a034-a202a2289c6d"
-# # ─────────────────────────────────────────────────────────────────────────────
-
-
 class InitializationDialog(QDialog):
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -365,13 +359,13 @@ class LayerSelectionDialog(QDialog):
             input_layer = self.inputCombo.currentData()
             input_field_names = set(field.name() for field in input_layer.fields())
             missing_fields = analysis_fields.difference(input_field_names)
-            # If five or fewer expected analysis fields are missing, assume it’s been whisped.
+            # If five or fewer expected analysis fields are missing, assume it has already been analyzed.
             if len(missing_fields) <= 5:
                 msgBox = QMessageBox(self)
                 msgBox.setIcon(QMessageBox.Warning)
-                msgBox.setWindowTitle("Re‑whisp?")
-                msgBox.setText("It seems you have previously whisped this input layer. Do you want to whisp it again?")
-                rewhisp_button = msgBox.addButton("Re‑whisp", QMessageBox.AcceptRole)
+                msgBox.setWindowTitle("Re‑analyze?")
+                msgBox.setText("It seems you have previously analyzed this input layer with Whisp. Do you want to analyze it again?")
+                rewhisp_button = msgBox.addButton("Re‑analyze", QMessageBox.AcceptRole)
                 cancel_button = msgBox.addButton("Cancel", QMessageBox.RejectRole)
                 msgBox.setDefaultButton(cancel_button)
                 msgBox.exec_()
@@ -697,7 +691,7 @@ class whisp_analysis:
             icon_path=icon_path,
             text=self.tr("Start OpenForis Whisp"),
             callback=self.on_submit_geojson,
-            status_tip=self.tr("Whisping..."),
+            status_tip=self.tr("Analyzing..."),
             add_to_toolbar=True,
             add_to_menu=True,
             parent=self.iface.mainWindow()
@@ -1194,10 +1188,10 @@ class whisp_analysis:
                 QgsMessageLog.logMessage("Failed to load temporary layer with properties.", "WhispAnalysis", Qgis.Critical)
                 return
 
-        # Check if the input layer is already fully whisped
+        # Check if the input layer is already fully analyzed
         existing_whisp_fields = set(field.name() for field in input_layer.fields()).intersection(set(self.whisp_columns_mapping.keys()))
         if len(existing_whisp_fields) == len(self.whisp_columns_mapping):
-            QgsMessageLog.logMessage("Input layer already contains all Whisp fields. Creating a clean copy for re‑whisping.", "WhispAnalysis", Qgis.Info)
+            QgsMessageLog.logMessage("Input layer already contains all Whisp fields. Creating a clean copy for re‑analysis.", "WhispAnalysis", Qgis.Info)
             input_layer = self.create_clean_layer(input_layer)
 
         # Process the output file name
@@ -1492,7 +1486,7 @@ class whisp_analysis:
             msg_box.setWindowIcon(QIcon(":/plugins/whisp_analysis/icon.png"))
             msg_box.setIcon(QMessageBox.Information)
             msg_box.setWindowTitle("Whisp")
-            msg_box.setText("Geometries whisped successfully!\n\nValues appended to the output layer.")
+            msg_box.setText("Geometries successfully analyzed with Whisp!\n\nValues appended to the output layer.")
             msg_box.exec_()
 
 
