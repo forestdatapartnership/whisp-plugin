@@ -59,6 +59,288 @@ import re
 import json
 import tempfile
 import math
+import time
+import gc
+
+# List of all ISO2 country codes
+ISO2_COUNTRY_CODES = [
+    'af', 'al', 'dz', 'as', 'ad', 'ao', 'ai', 'aq', 'ag', 'ar', 'am', 'aw', 'au',
+    'at', 'az', 'bs', 'bh', 'bd', 'bb', 'by', 'be', 'bz', 'bj', 'bm', 'bt', 'bo',
+    'bq', 'ba', 'bw', 'bv', 'br', 'io', 'bn', 'bg', 'bf', 'bi', 'cv', 'kh', 'cm',
+    'ca', 'ky', 'cf', 'td', 'cl', 'cn', 'cx', 'cc', 'co', 'km', 'cd', 'cg', 'ck',
+    'cr', 'hr', 'cu', 'cw', 'cy', 'cz', 'ci', 'dk', 'dj', 'dm', 'do', 'ec', 'eg',
+    'sv', 'gq', 'er', 'ee', 'sz', 'et', 'fk', 'fo', 'fj', 'fi', 'fr', 'gf', 'pf',
+    'tf', 'ga', 'gm', 'ge', 'de', 'gh', 'gi', 'gr', 'gl', 'gd', 'gp', 'gu', 'gt',
+    'gg', 'gn', 'gw', 'gy', 'ht', 'hm', 'va', 'hn', 'hk', 'hu', 'is', 'in', 'id',
+    'ir', 'iq', 'ie', 'im', 'il', 'it', 'jm', 'jp', 'je', 'jo', 'kz', 'ke', 'ki',
+    'kp', 'kr', 'kw', 'kg', 'la', 'lv', 'lb', 'ls', 'lr', 'ly', 'li', 'lt', 'lu',
+    'mo', 'mg', 'mw', 'my', 'mv', 'ml', 'mt', 'mh', 'mq', 'mr', 'mu', 'yt', 'mx',
+    'fm', 'md', 'mc', 'mn', 'me', 'ms', 'ma', 'mz', 'mm', 'na', 'nr', 'np', 'nl',
+    'nc', 'nz', 'ni', 'ne', 'ng', 'nu', 'nf', 'mp', 'no', 'om', 'pk', 'pw', 'ps',
+    'pa', 'pg', 'py', 'pe', 'ph', 'pn', 'pl', 'pt', 'pr', 'qa', 'mk', 'ro', 'ru',
+    'rw', 're', 'bl', 'sh', 'kn', 'lc', 'mf', 'pm', 'vc', 'ws', 'sm', 'st', 'sa',
+    'sn', 'rs', 'sc', 'sl', 'sg', 'sx', 'sk', 'si', 'sb', 'so', 'za', 'gs', 'ss',
+    'es', 'lk', 'sd', 'sr', 'sj', 'se', 'ch', 'sy', 'tw', 'tj', 'tz', 'th', 'tl',
+    'tg', 'tk', 'to', 'tt', 'tn', 'tr', 'tm', 'tc', 'tv', 'ug', 'ua', 'ae', 'gb',
+    'um', 'us', 'uy', 'uz', 'vu', 've', 'vn', 'vg', 'vi', 'wf', 'eh', 'ye', 'zm',
+    'zw', 'ax'
+]
+
+ISO2_CODE_TO_NAME = {
+    'af': 'Afghanistan',
+    'al': 'Albania',
+    'dz': 'Algeria',
+    'as': 'American Samoa',
+    'ad': 'Andorra',
+    'ao': 'Angola',
+    'ai': 'Anguilla',
+    'aq': 'Antarctica',
+    'ag': 'Antigua and Barbuda',
+    'ar': 'Argentina',
+    'am': 'Armenia',
+    'aw': 'Aruba',
+    'au': 'Australia',
+    'at': 'Austria',
+    'az': 'Azerbaijan',
+    'bs': 'Bahamas',
+    'bh': 'Bahrain',
+    'bd': 'Bangladesh',
+    'bb': 'Barbados',
+    'by': 'Belarus',
+    'be': 'Belgium',
+    'bz': 'Belize',
+    'bj': 'Benin',
+    'bm': 'Bermuda',
+    'bt': 'Bhutan',
+    'bo': 'Bolivia',
+    'bq': 'Bonaire, Sint Eustatius and Saba',
+    'ba': 'Bosnia and Herzegovina',
+    'bw': 'Botswana',
+    'bv': 'Bouvet Island',
+    'br': 'Brazil',
+    'io': 'British Indian Ocean Territory',
+    'bn': 'Brunei Darussalam',
+    'bg': 'Bulgaria',
+    'bf': 'Burkina Faso',
+    'bi': 'Burundi',
+    'cv': 'Cabo Verde',
+    'kh': 'Cambodia',
+    'cm': 'Cameroon',
+    'ca': 'Canada',
+    'ky': 'Cayman Islands',
+    'cf': 'Central African Republic',
+    'td': 'Chad',
+    'cl': 'Chile',
+    'cn': 'China',
+    'cx': 'Christmas Island',
+    'cc': 'Cocos (Keeling) Islands',
+    'co': 'Colombia',
+    'km': 'Comoros',
+    'cd': 'Democratic Republic of the Congo',
+    'cg': 'Congo',
+    'ck': 'Cook Islands',
+    'cr': 'Costa Rica',
+    'hr': 'Croatia',
+    'cu': 'Cuba',
+    'cw': 'Curaçao',
+    'cy': 'Cyprus',
+    'cz': 'Czechia',
+    'ci': "Côte d'Ivoire",
+    'dk': 'Denmark',
+    'dj': 'Djibouti',
+    'dm': 'Dominica',
+    'do': 'Dominican Republic',
+    'ec': 'Ecuador',
+    'eg': 'Egypt',
+    'sv': 'El Salvador',
+    'gq': 'Equatorial Guinea',
+    'er': 'Eritrea',
+    'ee': 'Estonia',
+    'sz': 'Eswatini',
+    'et': 'Ethiopia',
+    'fk': 'Falkland Islands [Malvinas]',
+    'fo': 'Faroe Islands',
+    'fj': 'Fiji',
+    'fi': 'Finland',
+    'fr': 'France',
+    'gf': 'French Guiana',
+    'pf': 'French Polynesia',
+    'tf': 'French Southern Territories',
+    'ga': 'Gabon',
+    'gm': 'Gambia',
+    'ge': 'Georgia',
+    'de': 'Germany',
+    'gh': 'Ghana',
+    'gi': 'Gibraltar',
+    'gr': 'Greece',
+    'gl': 'Greenland',
+    'gd': 'Grenada',
+    'gp': 'Guadeloupe',
+    'gu': 'Guam',
+    'gt': 'Guatemala',
+    'gg': 'Guernsey',
+    'gn': 'Guinea',
+    'gw': 'Guinea-Bissau',
+    'gy': 'Guyana',
+    'ht': 'Haiti',
+    'hm': 'Heard Island and McDonald Islands',
+    'va': 'Holy See (Vatican)',
+    'hn': 'Honduras',
+    'hk': 'Hong Kong',
+    'hu': 'Hungary',
+    'is': 'Iceland',
+    'in': 'India',
+    'id': 'Indonesia',
+    'ir': 'Iran',
+    'iq': 'Iraq',
+    'ie': 'Ireland',
+    'im': 'Isle of Man',
+    'il': 'Israel',
+    'it': 'Italy',
+    'jm': 'Jamaica',
+    'jp': 'Japan',
+    'je': 'Jersey',
+    'jo': 'Jordan',
+    'kz': 'Kazakhstan',
+    'ke': 'Kenya',
+    'ki': 'Kiribati',
+    'kp': "Korea (Democratic People's Republic of)",
+    'kr': 'Korea (Republic of)',
+    'kw': 'Kuwait',
+    'kg': 'Kyrgyzstan',
+    'la': "Lao People's Democratic Republic",
+    'lv': 'Latvia',
+    'lb': 'Lebanon',
+    'ls': 'Lesotho',
+    'lr': 'Liberia',
+    'ly': 'Libya',
+    'li': 'Liechtenstein',
+    'lt': 'Lithuania',
+    'lu': 'Luxembourg',
+    'mo': 'Macao',
+    'mg': 'Madagascar',
+    'mw': 'Malawi',
+    'my': 'Malaysia',
+    'mv': 'Maldives',
+    'ml': 'Mali',
+    'mt': 'Malta',
+    'mh': 'Marshall Islands',
+    'mq': 'Martinique',
+    'mr': 'Mauritania',
+    'mu': 'Mauritius',
+    'yt': 'Mayotte',
+    'mx': 'Mexico',
+    'fm': 'Micronesia',
+    'md': 'Moldova',
+    'mc': 'Monaco',
+    'mn': 'Mongolia',
+    'me': 'Montenegro',
+    'ms': 'Montserrat',
+    'ma': 'Morocco',
+    'mz': 'Mozambique',
+    'mm': 'Myanmar',
+    'na': 'Namibia',
+    'nr': 'Nauru',
+    'np': 'Nepal',
+    'nl': 'Netherlands',
+    'nc': 'New Caledonia',
+    'nz': 'New Zealand',
+    'ni': 'Nicaragua',
+    'ne': 'Niger',
+    'ng': 'Nigeria',
+    'nu': 'Niue',
+    'nf': 'Norfolk Island',
+    'mp': 'Northern Mariana Islands',
+    'no': 'Norway',
+    'om': 'Oman',
+    'pk': 'Pakistan',
+    'pw': 'Palau',
+    'ps': 'Palestine',
+    'pa': 'Panama',
+    'pg': 'Papua New Guinea',
+    'py': 'Paraguay',
+    'pe': 'Peru',
+    'ph': 'Philippines',
+    'pn': 'Pitcairn',
+    'pl': 'Poland',
+    'pt': 'Portugal',
+    'pr': 'Puerto Rico',
+    'qa': 'Qatar',
+    'mk': 'North Macedonia',
+    'ro': 'Romania',
+    'ru': 'Russian Federation',
+    'rw': 'Rwanda',
+    're': 'Réunion',
+    'bl': 'Saint Barthélemy',
+    'sh': 'Saint Helena, Ascension and Tristan da Cunha',
+    'kn': 'Saint Kitts and Nevis',
+    'lc': 'Saint Lucia',
+    'mf': 'Saint Martin (French part)',
+    'pm': 'Saint Pierre and Miquelon',
+    'vc': 'Saint Vincent and the Grenadines',
+    'ws': 'Samoa',
+    'sm': 'San Marino',
+    'st': 'Sao Tome and Principe',
+    'sa': 'Saudi Arabia',
+    'sn': 'Senegal',
+    'rs': 'Serbia',
+    'sc': 'Seychelles',
+    'sl': 'Sierra Leone',
+    'sg': 'Singapore',
+    'sx': 'Sint Maarten (Dutch part)',
+    'sk': 'Slovakia',
+    'si': 'Slovenia',
+    'sb': 'Solomon Islands',
+    'so': 'Somalia',
+    'za': 'South Africa',
+    'gs': 'South Georgia and the South Sandwich Islands',
+    'ss': 'South Sudan',
+    'es': 'Spain',
+    'lk': 'Sri Lanka',
+    'sd': 'Sudan',
+    'sr': 'Suriname',
+    'sj': 'Svalbard and Jan Mayen',
+    'se': 'Sweden',
+    'ch': 'Switzerland',
+    'sy': 'Syrian Arab Republic',
+    'tw': 'Taiwan',
+    'tj': 'Tajikistan',
+    'tz': 'Tanzania',
+    'th': 'Thailand',
+    'tl': 'Timor-Leste',
+    'tg': 'Togo',
+    'tk': 'Tokelau',
+    'to': 'Tonga',
+    'tt': 'Trinidad and Tobago',
+    'tn': 'Tunisia',
+    'tr': 'Türkiye',
+    'tm': 'Turkmenistan',
+    'tc': 'Turks and Caicos Islands',
+    'tv': 'Tuvalu',
+    'ug': 'Uganda',
+    'ua': 'Ukraine',
+    'ae': 'United Arab Emirates',
+    'gb': 'United Kingdom of Great Britain and Northern Ireland',
+    'um': 'United States Minor Outlying Islands',
+    'us': 'United States of America',
+    'uy': 'Uruguay',
+    'uz': 'Uzbekistan',
+    'vu': 'Vanuatu',
+    've': 'Venezuela',
+    'vn': 'Viet Nam',
+    'vg': 'Virgin Islands (British)',
+    'vi': 'Virgin Islands (U.S.)',
+    'wf': 'Wallis and Futuna',
+    'eh': 'Western Sahara',
+    'ye': 'Yemen',
+    'zm': 'Zambia',
+    'zw': 'Zimbabwe',
+    'ax': 'Åland Islands',
+}
+
+ISO2_COUNTRY_CODES = sorted(ISO2_CODE_TO_NAME.keys())
+
+
 
 def check_and_install(package):
     #Check if a package is installed, and install it if not
@@ -77,10 +359,16 @@ from PyQt5.QtWidgets import (
 
 from qgis import processing
 from qgis.core import QgsProject, QgsMapLayer, QgsVectorFileWriter, QgsVectorLayer, QgsMessageLog, Qgis, QgsField, QgsCoordinateReferenceSystem, QgsCoordinateTransform, QgsFeature, QgsWkbTypes, QgsDistanceArea, QgsGeometry, QgsPointXY, QgsFields
-from qgis.PyQt.QtCore import QThread, pyqtSignal, QObject, QSettings, QTranslator, QCoreApplication, QVariant, Qt
+from qgis.PyQt.QtCore import QThread, pyqtSignal, QObject, QSettings, QTranslator, QCoreApplication, QVariant, Qt, QTimer, QPoint
 
-from qgis.PyQt.QtGui import QIcon, QPixmap
-from qgis.PyQt.QtWidgets import QAction, QProgressBar, QMessageBox, QInputDialog, QLineEdit, QDialog, QVBoxLayout, QTextBrowser, QDialogButtonBox, QCheckBox, QGridLayout
+from qgis.PyQt.QtGui import QIcon, QPixmap, QStandardItemModel, QStandardItem
+
+from qgis.PyQt.QtWidgets import (
+    QAction, QProgressBar, QMessageBox, QDialog, QLabel, QComboBox,
+    QVBoxLayout, QHBoxLayout, QTextBrowser, QDialogButtonBox, QCheckBox,
+    QGridLayout, QRadioButton, QButtonGroup, QScrollArea, QWidget, QLineEdit,
+    QPushButton, QListView, QInputDialog
+)
 
 from .resources import *  # Qt resources
 from .whisp_analysis_dialog import whisp_analysisDialog
@@ -110,42 +398,225 @@ class InitializationWorker(QObject):
     def __init__(self, api_key, parent=None):
         super().__init__(parent)
         self.api_key = api_key
+        self.cancelled = False
+
+    def cancel(self):
+        self.cancelled = True
+
+    def _finish_cancelled(self):
+        self.finished.emit({"cancelled": True})
+
+    def _connectivity_error(self):
+        return (
+            "Can't connect to Whisp API.\n\n"
+            "Missing internet connection or port issue.\n\n"
+            "Make sure to be connected and that port 443 can be accessed."
+        )
 
     def run(self):
-        # Check connectivity.
+        if self.cancelled:
+            self._finish_cancelled()
+            return
+
+        # Check connectivity before making the initialization API call.
         if not is_connected("https://whisp.openforis.org", timeout=5):
-            error_msg = "Can't connect to Whisp API. \n\nMissing internet connection or port issue. \n\nMake sure to be connected and that port 443 can be accessed."
-            self.progress.emit(error_msg)
-            self.finished.emit({"error": error_msg})
+            error_msg = self._connectivity_error()
+            if self.cancelled:
+                self._finish_cancelled()
+            else:
+                self.progress.emit(error_msg)
+                self.finished.emit({
+                    "error": error_msg,
+                    "error_type": "connectivity"
+                })
+            return
+
+        if self.cancelled:
+            self._finish_cancelled()
             return
 
         # Proceed with test geometry API call.
         test_geojson = {
             "type": "FeatureCollection",
             "features": [
-                {"type": "Feature", "geometry": {"type": "Point", "coordinates": [0, 0]}, "properties": {}} #Sends a point at 0°N/S and 0°E/W to retrieve Whisp columns currently available.
-            ]
+                {
+                    "type": "Feature",
+                    "geometry": {
+                        "type": "Point",
+                        "coordinates": [0, 0]
+                    },
+                    "properties": {}
+                }  # Point at 0°N/S and 0°E/W to retrieve Whisp columns currently available.
+            ],
+            "analysisOptions": {
+                # No external id used for this test call
+                "externalIdColumn": "",
+                # All ISO2 national codes (from ISO2_COUNTRY_CODES)
+                "nationalCodes": ISO2_COUNTRY_CODES,
+                # Always hectares for initialization
+                "unitType": "ha",
+                # Force sync mode so we get the full result immediately
+                "async": False
+            }
         }
+
         url = "https://whisp.openforis.org/api/submit/geojson"
         headers = {
             "Content-Type": "application/json",
             "x-api-key": self.api_key
         }
+
         try:
-            response = requests.post(url, json=test_geojson, headers=headers)
+            response = requests.post(
+                url,
+                json=test_geojson,
+                headers=headers,
+                timeout=30
+            )
+
+            if self.cancelled:
+                self._finish_cancelled()
+                return
+
             if response.status_code == 200:
                 result = response.json()
                 self.progress.emit("Initialization complete.")
                 self.finished.emit(result)
             else:
                 error_msg = f"Error {response.status_code}: {response.text}"
+                error_type = "auth" if "Invalid or expired API key" in response.text else "api"
                 self.progress.emit(error_msg)
-                self.finished.emit({"error": error_msg})
+                self.finished.emit({
+                    "error": error_msg,
+                    "error_type": error_type
+                })
+
+        except (requests.exceptions.ConnectionError, requests.exceptions.Timeout) as e:
+            if self.cancelled:
+                self._finish_cancelled()
+                return
+
+            error_msg = self._connectivity_error()
+            QgsMessageLog.logMessage(
+                f"Initialization connectivity error: {e}",
+                "WhispAnalysis",
+                Qgis.Warning
+            )
+            self.progress.emit(error_msg)
+            self.finished.emit({
+                "error": error_msg,
+                "error_type": "connectivity"
+            })
+
         except Exception as e:
+            if self.cancelled:
+                self._finish_cancelled()
+                return
+
             error_msg = f"Request failed: {str(e)}"
             self.progress.emit(error_msg)
-            self.finished.emit({"error": error_msg})
+            self.finished.emit({
+                "error": error_msg,
+                "error_type": "unexpected"
+            })
 
+
+class CountrySelectionDialog(QDialog):
+    """
+    Dialog to choose country-specific results (nXX_... columns).
+    Shows available countries as checkboxes, with None / All buttons.
+    """
+    def __init__(self, available_country_codes, preselected_codes, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("Country selection")
+
+        self.available_country_codes = set(available_country_codes or [])
+        self.preselected_codes = set(preselected_codes or [])
+
+        layout = QVBoxLayout(self)
+
+        # Title
+        layout.addWidget(QLabel("Include country-specific results:"))
+
+        # None / All buttons
+        btnLayout = QHBoxLayout()
+        self.btnNone = QPushButton("None")
+        self.btnAll = QPushButton("All")
+        btnLayout.addWidget(self.btnNone)
+        btnLayout.addWidget(self.btnAll)
+        btnLayout.addStretch()
+        layout.addLayout(btnLayout)
+
+        # Scrollable checklist
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setMaximumHeight(200)
+
+        container = QWidget()
+        vbox = QVBoxLayout(container)
+        vbox.setContentsMargins(0, 0, 0, 0)
+
+        self.country_checkboxes = {}  # iso2 -> QCheckBox
+
+        # Available countries (from nXX_ columns)
+        available_sorted = sorted(
+            self.available_country_codes,
+            key=lambda c: ISO2_CODE_TO_NAME.get(c, c.upper())
+        )
+
+        for code in available_sorted:
+            name = ISO2_CODE_TO_NAME.get(code, code.upper())
+            cb = QCheckBox(name)
+            cb.setChecked(code in self.preselected_codes)
+            vbox.addWidget(cb)
+            self.country_checkboxes[code] = cb
+
+        # Separator
+        sep_label = QLabel("────────────")
+        sep_label.setStyleSheet("color: gray;")
+        vbox.addWidget(sep_label)
+
+        # Remaining countries (greyed out)
+        remaining_sorted = sorted(
+            set(ISO2_COUNTRY_CODES) - self.available_country_codes,
+            key=lambda c: ISO2_CODE_TO_NAME.get(c, c.upper())
+        )
+
+        for code in remaining_sorted:
+            name = ISO2_CODE_TO_NAME.get(code, code.upper())
+            cb = QCheckBox(name)
+            cb.setEnabled(False)
+            cb.setStyleSheet("color: gray;")
+            vbox.addWidget(cb)
+
+        container.setLayout(vbox)
+        scroll.setWidget(container)
+        layout.addWidget(scroll)
+
+        # Dialog buttons
+        buttonBox = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
+        buttonBox.accepted.connect(self.accept)
+        buttonBox.rejected.connect(self.reject)
+        layout.addWidget(buttonBox)
+
+        # Wire None / All
+        self.btnNone.clicked.connect(self.select_none)
+        self.btnAll.clicked.connect(self.select_all)
+
+    def select_none(self):
+        for cb in self.country_checkboxes.values():
+            cb.setChecked(False)
+
+    def select_all(self):
+        for cb in self.country_checkboxes.values():
+            cb.setChecked(True)
+
+    def get_selected_country_codes(self):
+        return [
+            code
+            for code, cb in self.country_checkboxes.items()
+            if cb.isChecked()
+        ]
 
 
 
@@ -154,6 +625,8 @@ class LayerSelectionDialog(QDialog):
     def __init__(self, columns_mapping, parent=None, default_layer=None):
         super().__init__(parent)
         self.columns_mapping = columns_mapping  # store for later use
+        # Store selected countries (ISO2 lower-case codes)
+        self.selected_country_codes = []
         self.setWindowTitle("Whisp")
         self.setWindowIcon(QIcon(":/plugins/whisp_analysis/icon.png"))
         layout = QVBoxLayout(self)
@@ -240,33 +713,89 @@ class LayerSelectionDialog(QDialog):
 
         # Output Columns Selection
         layout.addWidget(QLabel("Select Output Columns:"))
+
+        # Split columns into normal vs country-specific (nXX_...)
+        import re
+        self.national_columns_by_code = {}   # e.g. {'br': ['nBR_...', 'nBR_...'], ...}
+        self.available_country_codes = set()
+
+        pattern = re.compile(r"^n([A-Z]{2})_")
+        normal_columns = []
+
+        for column in columns_mapping:
+            # Skip internal metadata column from user selection
+            if column == "whisp_processing_metadata":
+                continue
+
+            m = pattern.match(column)
+            if m:
+                iso2 = m.group(1).lower()
+                self.available_country_codes.add(iso2)
+                self.national_columns_by_code.setdefault(iso2, []).append(column)
+            else:
+                normal_columns.append(column)
+
+
         self.scroll_area = QScrollArea()
         self.scroll_area.setWidgetResizable(True)
         self.checkbox_widget = QWidget()
         self.checkbox_widget.setObjectName("checkboxWidget")
         self.checkbox_layout = QVBoxLayout(self.checkbox_widget)
         self.checkboxes = {}
-        for column in columns_mapping:
+
+        # Only show non-country-specific columns here
+        for column in normal_columns:
             checkbox = QCheckBox(column)
             checkbox.setChecked(True)
             checkbox.stateChanged.connect(self.updateOkButtonState)
             self.checkboxes[column] = checkbox
             self.checkbox_layout.addWidget(checkbox)
+
         self.scroll_area.setWidget(self.checkbox_widget)
         layout.addWidget(self.scroll_area)
+             
 
         # Quick Selection Buttons
         btnLayout = QHBoxLayout()
         self.btnDeselectAll = QPushButton("Deselect all")
         self.btnSelectAll = QPushButton("Select all")
-        # self.btnSelectEUDR = QPushButton("Reduced Selection")
         btnLayout.addWidget(self.btnDeselectAll)
         btnLayout.addWidget(self.btnSelectAll)
-        # btnLayout.addWidget(self.btnSelectEUDR)
         layout.addLayout(btnLayout)
         self.btnDeselectAll.clicked.connect(self.deselectAll)
         self.btnSelectAll.clicked.connect(self.selectAll)
-        # self.btnSelectEUDR.clicked.connect(self.selectEUDRRelevant)
+
+        # Row: Country selection button + Output unit radios
+        rowLayout = QHBoxLayout()
+
+        # Country selection button (left)
+        self.countryButton = QPushButton("Country selection")
+        rowLayout.addWidget(self.countryButton)
+
+        rowLayout.addStretch()
+
+        # Output unit choice (right)
+        unitLabel = QLabel("Output unit:")
+        self.unitHaRadio = QRadioButton("Hectares")
+        self.unitPercentRadio = QRadioButton("Percentage")
+
+        self.unitHaRadio.setChecked(True)
+
+        self.unitGroup = QButtonGroup(self)
+        self.unitGroup.addButton(self.unitHaRadio)
+        self.unitGroup.addButton(self.unitPercentRadio)
+        self.unitGroup.setExclusive(True)
+
+        rowLayout.addWidget(unitLabel)
+        rowLayout.addWidget(self.unitHaRadio)
+        rowLayout.addWidget(self.unitPercentRadio)
+
+        layout.addLayout(rowLayout)
+
+        # Wire country selection dialog
+        self.countryButton.clicked.connect(self.open_country_dialog)
+
+
 
         # Dialog Buttons (OK/Cancel)
         self.buttonBox = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
@@ -276,6 +805,33 @@ class LayerSelectionDialog(QDialog):
 
         self.updateOkButtonState()
         self.applyCustomStyleSheet()
+
+
+    
+    def select_no_countries(self):
+        """Uncheck all available country checkboxes."""
+        for code, cb in self.country_checkboxes.items():
+            cb.setChecked(False)
+
+    def select_all_countries(self):
+        """Check all available country checkboxes."""
+        for code, cb in self.country_checkboxes.items():
+            cb.setChecked(True)
+
+    def open_country_dialog(self):
+        """
+        Open the CountrySelectionDialog to edit self.selected_country_codes.
+        """
+        # If you set self.available_country_codes earlier when parsing columns:
+        available = getattr(self, "available_country_codes", set())
+
+        dlg = CountrySelectionDialog(
+            available_country_codes=available,
+            preselected_codes=self.selected_country_codes,
+            parent=self
+        )
+        if dlg.exec_():
+            self.selected_country_codes = dlg.get_selected_country_codes()
 
 
 
@@ -291,10 +847,78 @@ class LayerSelectionDialog(QDialog):
             msgBox.setText("Can't connect to Whisp API. \n\nMissing internet connection or port issue. \n\nMake sure to be connected and that port 443 can be accessed.")
             msgBox.exec_()
             return
+
+        # Keep the workflow simple and safe: do not allow the input and
+        # output files to have the same file name, even if they are in
+        # different folders. This avoids confusing overwrite/temp-file cases
+        # and keeps the main dialog open after the warning.
+        input_layer = self.inputCombo.currentData()
+        output_file = self.newFileLineEdit.text().strip()
+        if input_layer and output_file and hasattr(input_layer, "source"):
+            try:
+                input_source_path = input_layer.source().split("|")[0] if input_layer.source() else ""
+                input_name = os.path.basename(input_source_path).lower() if input_source_path else ""
+
+                candidate_output_file = output_file
+                if not os.path.isabs(candidate_output_file):
+                    input_dir = os.path.dirname(input_source_path) if input_source_path else ""
+                    candidate_output_file = os.path.join(input_dir, candidate_output_file)
+                if not candidate_output_file.lower().endswith(".geojson"):
+                    candidate_output_file += ".geojson"
+
+                output_name = os.path.basename(candidate_output_file).lower()
+
+                if input_name and output_name and input_name == output_name:
+                    msg_box = QMessageBox(self)
+                    msg_box.setIcon(QMessageBox.Warning)
+                    msg_box.setWindowTitle("Invalid output file name")
+                    msg_box.setText(
+                        "The input and output file cannot have the same name.\n\n"
+                        "Please choose a different output file name."
+                    )
+                    msg_box.setStandardButtons(QMessageBox.Ok)
+                    msg_box.exec_()
+                    return
+
+                # If the desired output file is already loaded in QGIS, do not
+                # proceed. On Windows, QGIS/OGR can lock loaded files and block
+                # the final temp-file replacement step. Keep the main dialog open
+                # so the user can remove the layer or choose another output file.
+                candidate_output_path = os.path.normcase(os.path.abspath(candidate_output_file))
+                for layer in QgsProject.instance().mapLayers().values():
+                    try:
+                        layer_source = layer.source().split("|")[0] if hasattr(layer, "source") else ""
+                        if not layer_source:
+                            continue
+                        layer_path = os.path.normcase(os.path.abspath(layer_source))
+                        if layer_path == candidate_output_path:
+                            msg_box = QMessageBox(self)
+                            msg_box.setIcon(QMessageBox.Warning)
+                            msg_box.setWindowTitle("Output file is open in QGIS")
+                            msg_box.setText(
+                                "The output file is open in QGIS.\n"
+                                "Please remove the layer from QGIS or create a different output file before proceeding."
+                            )
+                            msg_box.setStandardButtons(QMessageBox.Ok)
+                            msg_box.exec_()
+                            return
+                    except Exception as e:
+                        QgsMessageLog.logMessage(
+                            f"Could not inspect loaded layer while checking output path: {e}",
+                            "WhispAnalysis",
+                            Qgis.Warning
+                        )
+
+            except Exception as e:
+                QgsMessageLog.logMessage(
+                    f"Could not compare input and output file names: {e}",
+                    "WhispAnalysis",
+                    Qgis.Warning
+                )
         
         # 0) Abort on mixed GeoJSON geometry types right away
         input_layer = self.inputCombo.currentData()
-        if input_layer and input_layer.providerType() == "ogr":
+        if input_layer and hasattr(input_layer, "providerType") and input_layer.providerType() == "ogr":
             uri = input_layer.dataProvider().dataSourceUri()
             path = uri.split("|")[0]
             try:
@@ -328,7 +952,7 @@ class LayerSelectionDialog(QDialog):
 
         # Next, check CRS of the selected input layer.
         input_layer = self.inputCombo.currentData()
-        if input_layer:
+        if input_layer and hasattr(input_layer, "crs"):
             source_crs = input_layer.crs()
             # Construct a detailed CRS string, e.g. "EPSG:3857 - Google Maps CRS"
             source_crs_str = f"{source_crs.authid()} - {source_crs.description()}"
@@ -353,35 +977,6 @@ class LayerSelectionDialog(QDialog):
                     return
                 
         
-        # Perform a re‑whisp check.
-        if not getattr(self, 'allow_rewhisp', False):
-            analysis_fields = set(self.columns_mapping.keys())
-            input_layer = self.inputCombo.currentData()
-            input_field_names = set(field.name() for field in input_layer.fields())
-            missing_fields = analysis_fields.difference(input_field_names)
-            # If five or fewer expected analysis fields are missing, assume it has already been analyzed.
-            if len(missing_fields) <= 5:
-                msgBox = QMessageBox(self)
-                msgBox.setIcon(QMessageBox.Warning)
-                msgBox.setWindowTitle("Re‑analyze?")
-                msgBox.setText("It seems you have previously analyzed this input layer with Whisp. Do you want to analyze it again?")
-                rewhisp_button = msgBox.addButton("Re‑analyze", QMessageBox.AcceptRole)
-                cancel_button = msgBox.addButton("Cancel", QMessageBox.RejectRole)
-                msgBox.setDefaultButton(cancel_button)
-                msgBox.exec_()
-                if msgBox.clickedButton() == cancel_button:
-                    # User chose to cancel; do not close the dialog.
-                    return
-                else:
-                    # User chose to re‑whisp.
-                    self.allow_rewhisp = True
-                    try:
-                        self.buttonBox.accepted.disconnect(self.accept)
-                    except Exception:
-                        pass
-                    super().accept()
-                    return
-                
         # 4) Multi-geometry warning
         # -- grab the same layer from the combo each time --
         input_layer = self.inputCombo.currentData()
@@ -556,11 +1151,23 @@ class LayerSelectionDialog(QDialog):
                 checkbox.setChecked(False)
 
     def getSelections(self):
-        # Return the chosen input layer, output file path, and list of selected columns
         input_layer = self.inputCombo.currentData()
         output_file = self.newFileLineEdit.text()
         selected_columns = [col for col, cb in self.checkboxes.items() if cb.isChecked()]
-        return input_layer, output_file, selected_columns
+
+        if self.unitHaRadio.isChecked():
+            unit_type = "ha"
+        else:
+            unit_type = "percent"
+
+        # Country codes come from the separate dialog
+        selected_country_codes = list(self.selected_country_codes)
+
+        return input_layer, output_file, selected_columns, unit_type, selected_country_codes
+
+
+
+
 
 
 
@@ -574,13 +1181,33 @@ class WhispWorker(QObject):
     """
     finished = pyqtSignal(dict)   # Signal to send back the API response
     progress = pyqtSignal(str)    # Signal to update progress messages
+    progress_percent = pyqtSignal(int)  # Real API progress percentage, when available
 
     def __init__(self, geojson, api_key, parent=None):
         super().__init__(parent)
         self.geojson = geojson
         self.api_key = api_key
+        self.cancelled = False
+
+    def cancel(self):
+        self.cancelled = True
+
+    def _finish_cancelled(self):
+        self.finished.emit({"cancelled": True})
+
+    def _sleep_with_cancel(self, seconds):
+        end_time = time.time() + max(0, seconds)
+        while time.time() < end_time:
+            if self.cancelled:
+                return False
+            time.sleep(min(0.2, end_time - time.time()))
+        return not self.cancelled
 
     def run(self):
+        if self.cancelled:
+            self._finish_cancelled()
+            return
+
         # 1) Connectivity check
         if not is_connected("https://whisp.openforis.org", timeout=5):
             error_msg = (
@@ -588,33 +1215,213 @@ class WhispWorker(QObject):
                 "Missing internet connection or port issue.\n\n"
                 "Make sure to be connected and that port 443 can be accessed."
             )
-            self.progress.emit(error_msg)
-            self.finished.emit({"error": error_msg})
+            if not self.cancelled:
+                self.progress.emit(error_msg)
+                self.finished.emit({"error": error_msg})
+            else:
+                self._finish_cancelled()
             return
 
-        # 2) Send the request
-        self.progress.emit("Sending request to Whisp API...")
-        url = "https://whisp.openforis.org/api/submit/geojson"
+        if self.cancelled:
+            self._finish_cancelled()
+            return
+
+        submit_url = "https://whisp.openforis.org/api/submit/geojson"
         headers = {
             "Content-Type": "application/json",
-            "x-api-key": self.api_key
+            "x-api-key": self.api_key,
         }
 
         try:
-            response = requests.post(url, json=self.geojson, headers=headers)
-            if response.status_code == 200:
-                result = response.json()
-                self.progress.emit("Whisp Analysis completed successfully.")
-                self.finished.emit(result)
-            else:
+            # 2) Submit the analysis request
+            if self.cancelled:
+                self._finish_cancelled()
+                return
+            self.progress.emit("Sending request to Whisp API...")
+            response = requests.post(submit_url, json=self.geojson, headers=headers, timeout=60)
+            if self.cancelled:
+                self._finish_cancelled()
+                return
+
+            if response.status_code != 200:
                 error_msg = f"Error {response.status_code}: {response.text}"
                 self.progress.emit(error_msg)
                 self.finished.emit({"error": error_msg})
+                return
+
+            result = response.json()
+            QgsMessageLog.logMessage(
+                f"Whisp initial response: {result}",
+                "WhispAnalysis",
+                Qgis.Info,
+            )
+
+            code = result.get("code")
+            data = result.get("data", {})
+
+            # --- Async path: we got a token and need to poll /api/status/{token} ---
+            token = None
+            if code == "analysis_processing" and isinstance(data, dict):
+                token = data.get("token")
+
+            if token:
+                # Either use statusUrl from API or fall back to /api/status/{token}
+                status_path = data.get("statusUrl") or f"/api/status/{token}"
+                status_url = f"https://whisp.openforis.org{status_path}"
+
+                max_attempts = 100       # up to ~5 minutes with interval_seconds=3
+                interval_seconds = 3
+
+                for attempt in range(max_attempts):
+                    if self.cancelled:
+                        self._finish_cancelled()
+                        return
+
+                    # Poll the status endpoint silently. User-facing progress is emitted
+                    # from Whisp status messages / percentages below, not from the
+                    # technical poll counter.
+                    status_resp = requests.get(status_url, headers=headers, timeout=30)
+                    if self.cancelled:
+                        self._finish_cancelled()
+                        return
+
+                    # Handle rate limiting gracefully
+                    if status_resp.status_code == 429:
+                        # Try to honor Retry-After if provided by the API
+                        retry_after_header = status_resp.headers.get("Retry-After")
+                        try:
+                            retry_after = int(retry_after_header) if retry_after_header else interval_seconds
+                        except Exception:
+                            retry_after = interval_seconds
+
+                        # Clamp to a sane range, e.g. between 10 and 120 seconds
+                        retry_after = max(10, min(retry_after, 120))
+
+                        msg = (
+                            f"Whisp status rate limit reached (429). "
+                            f"Waiting {retry_after} seconds before polling again..."
+                        )
+                        if not self.cancelled:
+                            self.progress.emit(msg)
+                            QgsMessageLog.logMessage(msg, "WhispAnalysis", Qgis.Warning)
+
+                        if not self._sleep_with_cancel(retry_after):
+                            self._finish_cancelled()
+                            return
+                        # Don't treat 429 as a hard failure; just continue to next attempt
+                        continue
+
+                    if status_resp.status_code != 200:
+                        error_msg = (
+                            f"Error {status_resp.status_code} while polling status: "
+                            f"{status_resp.text}"
+                        )
+                        self.progress.emit(error_msg)
+                        self.finished.emit({"error": error_msg})
+                        return
+
+
+                    status_json = status_resp.json()
+                    status_code = status_json.get("code")
+                    status_msg = status_json.get("message", "")
+
+                    if self.cancelled:
+                        self._finish_cancelled()
+                        return
+
+                    QgsMessageLog.logMessage(
+                        f"Whisp status response: {status_json}",
+                        "WhispAnalysis",
+                        Qgis.Info,
+                    )
+
+                    # --- Real progress reporting from Whisp status response ---
+                    # The Whisp web UI shows messages such as:
+                    # "Progress: 71/142 batches (50%) | Elapsed: 44s | ETA: 51s".
+                    # Depending on the API version, the status response may expose a
+                    # numeric data.percent and/or the raw message in
+                    # data.processStatusMessages. Support both.
+                    status_data = status_json.get("data", {}) or {}
+                    percent = status_data.get("percent") if isinstance(status_data, dict) else None
+                    messages = status_data.get("processStatusMessages", []) if isinstance(status_data, dict) else []
+                    if isinstance(messages, str):
+                        messages = [messages]
+                    elif not isinstance(messages, list):
+                        messages = []
+
+                    latest_progress_message = None
+                    for msg in reversed(messages):
+                        if isinstance(msg, str) and "Progress:" in msg:
+                            latest_progress_message = msg
+                            break
+
+                    if percent is None and latest_progress_message:
+                        match = re.search(r"\((\d+)%\)", latest_progress_message)
+                        if match:
+                            percent = int(match.group(1))
+
+                    if percent is not None:
+                        try:
+                            percent = max(0, min(100, int(percent)))
+                            # Some early status responses report percent=0 before
+                            # actual batch progress is available. Keep the progress
+                            # bar in indeterminate/marquee mode until Whisp reports
+                            # a real percentage or a real Progress: ... message.
+                            if percent > 0 or latest_progress_message:
+                                self.progress_percent.emit(percent)
+                        except Exception:
+                            pass
+
+                    if latest_progress_message:
+                        self.progress.emit(latest_progress_message)
+                    elif status_msg:
+                        self.progress.emit(status_msg)
+                    # --- End real progress reporting ---
+
+                    if status_code == "analysis_processing":
+                        # Still running; wait and poll again
+                        if not self._sleep_with_cancel(interval_seconds):
+                            self._finish_cancelled()
+                            return
+                        continue
+
+                    if status_code == "analysis_completed":
+                        # This should have the same structure as the old sync response,
+                        # so we can forward it directly to on_api_response.
+                        self.progress.emit("Whisp Analysis completed successfully.")
+                        self.finished.emit(status_json)
+                        return
+
+                    if status_code == "analysis_error":
+                        error_msg = f"Whisp analysis error: {status_msg}"
+                        self.progress.emit(error_msg)
+                        self.finished.emit({"error": error_msg})
+                        return
+
+                    # Unexpected code
+                    error_msg = f"Unexpected status response: {status_json}"
+                    self.progress.emit(error_msg)
+                    self.finished.emit({"error": error_msg})
+                    return
+
+                # If we get here, we never saw analysis_completed/analysis_error
+                error_msg = "Timed out waiting for Whisp analysis to complete."
+                self.progress.emit(error_msg)
+                self.finished.emit({"error": error_msg})
+                return
+
+            # --- Sync path (async=false or old behaviour): result already complete ---
+            self.progress.emit("Whisp Analysis completed successfully.")
+            self.finished.emit(result)
 
         except Exception as e:
+            if self.cancelled:
+                self._finish_cancelled()
+                return
             error_msg = f"Request failed: {str(e)}"
             self.progress.emit(error_msg)
             self.finished.emit({"error": error_msg})
+
 
 
 
@@ -628,56 +1435,129 @@ class whisp_analysis:
         #Constructor
         self.iface = iface
 
-        # —————— API key setup ——————
+        # API key setup: read any stored key, but do not prompt during QGIS startup.
+        # The prompt is shown only when the user launches the plugin from the toolbar/menu.
         self.settings = QSettings()
         self.api_key = self.settings.value("WhispAnalysis/api_key", "")
 
-        if not self.api_key:
-            # Ask user for their key
-            dlg = QInputDialog(self.iface.mainWindow())
-            dlg.setWindowTitle("OpenForis Whisp API Key")
-            # Multi-line label with explanatory text
-            dlg.setLabelText(
-                "Please enter your OpenForis Whisp API key:\n\n"
-                "If you do not have an API key, please register for OpenForis Whisp\n"
-                "(https://whisp.openforis.org/) and create one for your account."
-            )
-            dlg.setTextValue("")              # start with empty field
-            dlg.setOkButtonText("Submit")
-            dlg.setCancelButtonText("Cancel")
-            dlg.setOption(QInputDialog.UsePlainTextEditForTextInput, True)
-            # Optionally resize so the text wraps nicely
-            dlg.resize(400, 200)
-
-            if dlg.exec_() == QDialog.Accepted:
-                key = dlg.textValue()
-                ok = True
-            else:
-                key = ""
-                ok = False
-
-            if not ok or not key:
-                QMessageBox.critical(
-                    self.iface.mainWindow(),
-                    "API Key Required",
-                    "An API key is required to use the Whisp plugin."
-                )
-                # Abort loading the plugin
-                raise Exception("API key not provided")
-            # Save for next time
-            self.settings.setValue("WhispAnalysis/api_key", key)
-            self.api_key = key
-
-
-            
-
-        
         self.plugin_dir = os.path.dirname(__file__)
         self.actions = []
         self.menu = self.tr(u"&Whisp Analysis")
         self.first_start = None
         self.whisp_columns_file = None  # Store path to temp file
         self.whisp_columns_mapping = {}
+
+
+    def ensure_api_key(self):
+        """
+        Ensure a Whisp API key has been provided.
+        The key is not validated here; the normal initialization step validates it
+        while showing the initialization progress dialog.
+        """
+        self.api_key = self.settings.value("WhispAnalysis/api_key", "")
+
+        if self.api_key:
+            return True
+
+        dlg = QDialog(self.iface.mainWindow())
+        dlg.setWindowTitle("OpenForis Whisp API Key")
+
+        layout = QVBoxLayout(dlg)
+
+        prompt_label = QLabel("Please enter your OpenForis Whisp API key:")
+        prompt_label.setWordWrap(True)
+        layout.addWidget(prompt_label)
+
+        line_edit = QLineEdit(dlg)
+        layout.addWidget(line_edit)
+
+        explain_label = QLabel(
+            'If you do not have an API key, please '
+            '<a href="https://whisp.openforis.org/">register for OpenForis Whisp</a> '
+            'and create one for your account.'
+        )
+        explain_label.setTextFormat(Qt.RichText)
+        explain_label.setTextInteractionFlags(Qt.TextBrowserInteraction)
+        explain_label.setOpenExternalLinks(True)
+        explain_label.setWordWrap(True)
+        layout.addWidget(explain_label)
+
+        buttons = QDialogButtonBox(
+            QDialogButtonBox.Ok | QDialogButtonBox.Cancel,
+            parent=dlg
+        )
+        buttons.button(QDialogButtonBox.Ok).setText("Submit")
+        buttons.button(QDialogButtonBox.Cancel).setText("Cancel")
+        buttons.accepted.connect(dlg.accept)
+        buttons.rejected.connect(dlg.reject)
+        layout.addWidget(buttons)
+
+        dlg.resize(400, 160)
+
+        if dlg.exec_() != QDialog.Accepted:
+            return False
+
+        key = line_edit.text().strip()
+
+        if not key:
+            QMessageBox.warning(
+                self.iface.mainWindow(),
+                "API Key Required",
+                "Please enter a valid Whisp API key."
+            )
+            return False
+
+        self.settings.setValue("WhispAnalysis/api_key", key)
+        self.settings.sync()
+        self.api_key = key
+        return True
+
+    def ensure_terms_acknowledged(self):
+        """
+        Show Terms of Service / GEE acknowledgement on first user launch only.
+        Returns True if the user has already acknowledged or accepts now.
+        """
+        acknowledged = self.settings.value(
+            "WhispAnalysis/terms_acknowledged",
+            False,
+            type=bool
+        )
+
+        if acknowledged:
+            return True
+
+        if not self.show_acknowledgement_dialog():
+            return False
+
+        self.settings.setValue("WhispAnalysis/terms_acknowledged", True)
+        self.settings.sync()
+        return True
+
+
+    def launch_plugin(self):
+        """
+        Entry point when the user launches Whisp from the toolbar or Plugins menu.
+        QGIS can load the plugin silently; API key / Terms prompts only appear here.
+
+        Flow:
+        1. Ask for API key if none is stored.
+        2. Show the initialization dialog and validate/fetch Whisp columns.
+        3. Show Terms of Service acknowledgement.
+        4. Open the main Whisp dialog.
+        """
+        if not self.ensure_api_key():
+            return
+
+        if not self.whisp_columns_mapping:
+            self.initialize_whisp_columns()
+            if not self.whisp_columns_mapping:
+                return
+
+        if not self.ensure_terms_acknowledged():
+            return
+
+        self.on_submit_geojson()
+
 
     def tr(self, message):
         #Translate a string
@@ -690,7 +1570,7 @@ class whisp_analysis:
         self.add_action(
             icon_path=icon_path,
             text=self.tr("Start OpenForis Whisp"),
-            callback=self.on_submit_geojson,
+            callback=self.launch_plugin,
             status_tip=self.tr("Analyzing..."),
             add_to_toolbar=True,
             add_to_menu=True,
@@ -712,63 +1592,156 @@ class whisp_analysis:
 
     def initialize_whisp_columns(self):
         init_dialog = InitializationDialog(self.iface.mainWindow())
-        # Set up progress bar as percentage bar.
+        self.init_cancelled = False
+
+        # Set up progress bar as a simulated percentage bar.
         init_dialog.progress_bar.setRange(0, 100)
         init_dialog.progress_bar.setValue(0)
 
+        # Add a Cancel button so the user can safely stop initialization.
+        button_layout = QHBoxLayout()
+        button_layout.addStretch()
+        cancel_button = QPushButton("Cancel")
+        button_layout.addWidget(cancel_button)
+        init_dialog.layout().addLayout(button_layout)
+
         # Create timer to increment progress bar value.
         timer = QTimer(init_dialog)
-        timer.setInterval(300)  # 100 ms intervals -> 100 steps for 10 seconds.
+        timer.setInterval(150)  # Faster simulated initialization progress.
         timer.timeout.connect(lambda: init_dialog.progress_bar.setValue(
-            min(init_dialog.progress_bar.value() + 1, 100)))
+            min(init_dialog.progress_bar.value() + 1, 95)))
         timer.start()
 
         thread = QThread()
         worker = InitializationWorker(self.api_key)
         worker.moveToThread(thread)
 
+        self.init_thread = thread
+        self.init_worker = worker
+
+        def cancel_initialization():
+            self.init_cancelled = True
+            timer.stop()
+
+            try:
+                worker.cancel()
+            except Exception:
+                pass
+
+            try:
+                thread.requestInterruption()
+            except Exception:
+                pass
+
+            init_dialog.reject()
+
+        cancel_button.clicked.connect(cancel_initialization)
+
+        def on_dialog_finished(result):
+            # If the user closes the initialization dialog with the window X,
+            # cancel the worker without touching the thread after Qt may have
+            # scheduled it for deletion.
+            if result == QDialog.Rejected:
+                self.init_cancelled = True
+                try:
+                    worker.cancel()
+                except Exception:
+                    pass
+                try:
+                    thread.requestInterruption()
+                except RuntimeError:
+                    # The wrapped C++ QThread may already have been deleted.
+                    pass
+                except Exception:
+                    pass
+
+        init_dialog.finished.connect(on_dialog_finished)
+
+        def on_worker_progress(msg):
+            if getattr(self, "init_cancelled", False):
+                return
+            try:
+                init_dialog.label.setText(msg)
+            except RuntimeError:
+                # Dialog may already have been closed.
+                pass
+
         def on_worker_finished(result):
-            timer.stop()  # Stop progress timer.
-            init_dialog.progress_bar.setValue(100)
+            timer.stop()
+
+            if getattr(self, "init_cancelled", False) or result.get("cancelled"):
+                try:
+                    init_dialog.close()
+                except Exception:
+                    pass
+                return
+
+            # Only show 100% after successful initialization response.
+            if not result.get("error"):
+                init_dialog.progress_bar.setValue(100)
+
             self.on_initialization_finished(result, init_dialog)
 
         worker.finished.connect(on_worker_finished)
-        worker.progress.connect(lambda msg: init_dialog.label.setText(msg))
+        worker.progress.connect(on_worker_progress)
         worker.finished.connect(thread.quit)
         worker.finished.connect(worker.deleteLater)
         thread.finished.connect(thread.deleteLater)
         thread.started.connect(worker.run)
 
-        self.init_thread = thread  # Keep a reference.
         thread.start()
         init_dialog.exec_()
+
+        # Do not inspect thread.isRunning() here. The thread is connected to
+        # deleteLater(), so by the time exec_() returns the wrapped C++ QThread
+        # object may already be deleted. Dialog rejection is handled by
+        # on_dialog_finished() above.
 
 
     
     def on_initialization_finished(self, result, init_dialog):
         """
         Callback once the test-point probe returns.
-        If we see an auth error, ask for a new API key and retry once.
-        Otherwise build whisp_columns_mapping as before.
+        If we see an auth error, ask for a new API key and retry initialization.
+        Otherwise build whisp_columns_mapping.
         """
-        init_dialog.progress_bar.setValue(100)
+        if getattr(self, "init_cancelled", False) or result.get("cancelled"):
+            try:
+                init_dialog.close()
+            except Exception:
+                pass
+            return
 
-        # 1) Handle any API-returned errors
+        # 1) Handle any API-returned errors.
         if "error" in result:
             err = result["error"]
-            if "Invalid or expired API key" in err:
-                # 1) Ensure they've re-acknowledged the ToS/GEE
-                if not self.show_acknowledgement_dialog():
-                    # they cancelled or didn’t check both boxes: abort
+            error_type = result.get("error_type", "")
+
+            if error_type == "connectivity" or "Can't connect to Whisp API" in err:
+                try:
                     init_dialog.close()
-                    return  
-                # Create a custom input dialog with extra explanation
+                except Exception:
+                    pass
+                QMessageBox.critical(
+                    self.iface.mainWindow(),
+                    "Connectivity Error",
+                    err
+                )
+                return
+
+            if error_type == "auth" or "Invalid or expired API key" in err:
+                # Ask for a corrected API key. Terms of Service are shown only
+                # after initialization succeeds with a valid key.
+                try:
+                    init_dialog.close()
+                except Exception:
+                    pass
+
                 dlg = QDialog(self.iface.mainWindow())
                 dlg.setWindowTitle("API Key")
 
                 layout = QVBoxLayout(dlg)
 
-                # 1) Prompt label
                 prompt_label = QLabel(
                     "Your Whisp API key is inexistent, invalid, or expired.\n\n"
                     "Please enter a valid API key:"
@@ -776,14 +1749,12 @@ class whisp_analysis:
                 prompt_label.setWordWrap(True)
                 layout.addWidget(prompt_label)
 
-                # 2) Single-line input
                 line_edit = QLineEdit(dlg)
                 layout.addWidget(line_edit)
 
-                # 3) Explanation below the input, with clickable link
                 explain_label = QLabel(
-                    'If you do not have an API key, please register at '
-                    '<a href="https://whisp.openforis.org/">OpenForis Whisp</a> '
+                    'If you do not have an API key, please '
+                    '<a href="https://whisp.openforis.org/">register for OpenForis Whisp</a> '
                     'and create one for your account.'
                 )
                 explain_label.setTextFormat(Qt.RichText)
@@ -792,16 +1763,18 @@ class whisp_analysis:
                 explain_label.setWordWrap(True)
                 layout.addWidget(explain_label)
 
-                # 4) OK / Cancel buttons
                 buttons = QDialogButtonBox(
                     QDialogButtonBox.Ok | QDialogButtonBox.Cancel,
                     parent=dlg
                 )
+                buttons.button(QDialogButtonBox.Ok).setText("Submit")
+                buttons.button(QDialogButtonBox.Cancel).setText("Cancel")
                 buttons.accepted.connect(dlg.accept)
                 buttons.rejected.connect(dlg.reject)
                 layout.addWidget(buttons)
 
-                # 5) Execute and fetch result
+                dlg.resize(400, 160)
+
                 if dlg.exec_() == QDialog.Accepted:
                     new_key = line_edit.text().strip()
                     ok = bool(new_key)
@@ -810,41 +1783,44 @@ class whisp_analysis:
                     ok = False
 
                 if ok:
-                    # Save and retry initialization
-                    QSettings().setValue("WhispAnalysis/api_key", new_key)
+                    self.settings.setValue("WhispAnalysis/api_key", new_key)
+                    self.settings.sync()
                     self.api_key = new_key
-                    init_dialog.close()
                     self.initialize_whisp_columns()
                     return
-                else:
-                    QMessageBox.critical(
-                        self.iface.mainWindow(),
-                        "API Key Required",
-                        "A valid API key is required to use the Whisp plugin."
-                    )
-                    init_dialog.close()
-                    return
-            else:
-                # Some other initialization error
+
                 QMessageBox.critical(
                     self.iface.mainWindow(),
-                    "Initialization Error",
-                    f"Unexpected response from Whisp API:\n{err}"
+                    "API Key Required",
+                    "A valid API key is required to use the Whisp plugin."
                 )
-                init_dialog.close()
                 return
 
-        # 2) Normal mapping of columns from the returned GeoJSON
+            QMessageBox.critical(
+                self.iface.mainWindow(),
+                "Initialization Error",
+                f"Unexpected response from Whisp API:\n{err}"
+            )
+            try:
+                init_dialog.close()
+            except Exception:
+                pass
+            return
+
+        # 2) Normal mapping of columns from the returned GeoJSON.
         try:
             features = result.get("data", {}).get("features") or result.get("features")
             first_props = features[0]["properties"]
         except Exception:
+            try:
+                init_dialog.close()
+            except Exception:
+                pass
             QMessageBox.critical(
                 self.iface.mainWindow(),
                 "Initialization Error",
                 "Unexpected response from Whisp API:\n" + json.dumps(result)
             )
-            init_dialog.close()
             return
 
         mapping = {}
@@ -861,7 +1837,13 @@ class whisp_analysis:
             f"Whisp columns mapping: {self.whisp_columns_mapping}",
             "WhispAnalysis", Qgis.Info
         )
-        init_dialog.accept()
+
+        try:
+            init_dialog.progress_bar.setValue(100)
+            init_dialog.accept()
+        except Exception:
+            pass
+
 
 
 
@@ -881,7 +1863,11 @@ class whisp_analysis:
         """
         features = []
 
-        for feature in layer.getFeatures():
+        for feature_idx, feature in enumerate(layer.getFeatures(), start=1):
+            # Keep the UI responsive during large export loops.
+            if feature_idx % 100 == 0:
+                QApplication.processEvents()
+
             # 1) Build original properties dict (ensure plotId key)
             if layer.fields().count() > 0:
                 orig_props = {f.name(): feature[f.name()] for f in layer.fields()}
@@ -970,7 +1956,7 @@ class whisp_analysis:
     #     Fetch the full Terms of Service page, then display only the
     #     section from the “Terms of Service for Whisp API” heading onward.
     #     """
-    #     tos_url = "https://openforis.org/whisp-terms-of-service/"
+    #     tos_url = "https://www.openforis.org/whisp-terms/"
     #     try:
     #         resp = requests.get(tos_url, timeout=5)
     #         resp.raise_for_status()
@@ -1035,7 +2021,7 @@ class whisp_analysis:
         # First row
         lbl1 = QLabel(
             'I have read and understood the '
-            '<a href="https://openforis.org/whisp-terms-of-service/">'
+            '<a href="https://www.openforis.org/whisp-terms/">'
             'Terms of Service</a>.'
         )
         lbl1.setTextFormat(Qt.RichText)
@@ -1087,14 +2073,14 @@ class whisp_analysis:
     def on_submit_geojson(self):
 
         # self.show_terms_of_service()
-                
+
         # First, check connectivity.
         if not is_connected("https://whisp.openforis.org", timeout=5):
             QMessageBox.critical(self.iface.mainWindow(),
                 "Connectivity Error",
                 "Can't connect to Whisp API. \n\nMissing internet connection or port issue. \n\nMake sure to be connected and that port 443 can be accessed.")
             return
-             
+
         # If the column mapping isn't set or is empty, trigger initialization.
         if not self.whisp_columns_mapping:
             self.initialize_whisp_columns()
@@ -1113,263 +2099,1171 @@ class whisp_analysis:
         if not dialog.exec_():
             return
 
-        input_layer, output_file, selected_columns = dialog.getSelections()
+        input_layer, output_file, selected_columns, unit_type, selected_country_codes = dialog.getSelections()
+
         if not input_layer or not output_file or not selected_columns:
-            QgsMessageLog.logMessage("Invalid selection. Ensure an input layer, output file, and at least one column are selected.",
-                                    "WhispAnalysis", Qgis.Warning)
-            return
-        
-        # Immediately convert the input layer to EPSG:4326
-        input_layer = self.convert_to_epsg4326(input_layer)
-
-        # ——— Manual flatten + backlink ID ———
-        # 1) Copy original fields into a new QgsFields and add 'link_id'
-        orig_fields = input_layer.fields()
-        fields = QgsFields()
-        for f in orig_fields:
-            fields.append(f)
-        # only add link_id if not already present
-        if 'link_id' not in [f.name() for f in fields]:
-            fields.append(QgsField('link_id', QVariant.String))
-
-        # 2) Create an in-memory layer with those fields
-        mem = QgsVectorLayer(
-            f"{QgsWkbTypes.displayString(input_layer.wkbType())}?crs=EPSG:4326",
-            "flattened",
-            "memory"
-        )
-        mem.dataProvider().addAttributes(fields)
-        mem.updateFields()
-
-        # 3) Iterate, explode and back-link
-        for orig_idx, feat in enumerate(input_layer.getFeatures(), start=1):
-            geom = feat.geometry()
-            wkb = geom.wkbType()
-            # decide how to split
-            if QgsWkbTypes.isMultiType(wkb):
-                flat = QgsWkbTypes.flatType(wkb)
-                if flat == QgsWkbTypes.PolygonGeometry:
-                    parts = geom.asMultiPolygon()
-                    maker = lambda poly: QgsGeometry.fromPolygonXY(poly)
-                elif flat == QgsWkbTypes.PointGeometry:
-                    parts = geom.asMultiPoint()
-                    maker = lambda pt: QgsGeometry.fromPointXY(pt)
-                else:
-                    parts = geom.asGeometryCollection()
-                    maker = lambda g: g
-            else:
-                # single‐part: wrap into a list
-                parts = [geom]
-                maker = lambda g: g
-
-            for part_idx, part in enumerate(parts, start=1):
-                subgeom = maker(part)
-                new_feat = QgsFeature(fields)
-                # copy original attributes + space for link_id
-                attrs = feat.attributes() + [None]
-                new_feat.setAttributes(attrs)
-                new_feat.setGeometry(subgeom)
-                new_feat['link_id'] = f"geom{orig_idx}_feat{part_idx}"
-                mem.dataProvider().addFeatures([new_feat])
-
-        input_layer = mem
-        QgsMessageLog.logMessage("Manual flatten complete; created link_id field.", "WhispAnalysis", Qgis.Info)
-        # ——————————————————————————————
-
-
-        # Force normalization if the layer's attribute schema is empty
-        # (Even if the layer reports fields, check if the attributes are effectively empty.)
-        features = list(input_layer.getFeatures())
-        if input_layer.fields().count() == 0 or (features and len(features[0].attributes()) == 0):
-            QgsMessageLog.logMessage("Normalizing layer: exporting to temporary GeoJSON with properties.", "WhispAnalysis", Qgis.Info)
-            temp_geojson_path = self.export_layer_with_properties(input_layer)
-            input_layer = QgsVectorLayer(temp_geojson_path, "TempLayer", "ogr")
-            if not input_layer.isValid():
-                QgsMessageLog.logMessage("Failed to load temporary layer with properties.", "WhispAnalysis", Qgis.Critical)
-                return
-
-        # Check if the input layer is already fully analyzed
-        existing_whisp_fields = set(field.name() for field in input_layer.fields()).intersection(set(self.whisp_columns_mapping.keys()))
-        if len(existing_whisp_fields) == len(self.whisp_columns_mapping):
-            QgsMessageLog.logMessage("Input layer already contains all Whisp fields. Creating a clean copy for re‑analysis.", "WhispAnalysis", Qgis.Info)
-            input_layer = self.create_clean_layer(input_layer)
-
-        # Process the output file name
-        if not os.path.isabs(output_file):
-            input_source = input_layer.source()
-            input_dir = os.path.dirname(input_source) if input_source else ""
-            output_file = os.path.join(input_dir, output_file)
-        if not output_file.lower().endswith(".geojson"):
-            output_file += ".geojson"
-
-        # Ensure the input layer has a "plotId" field
-        if "plotId" not in [field.name() for field in input_layer.fields()]:
-            input_layer.startEditing()
-            input_layer.dataProvider().addAttributes([QgsField("plotId", QVariant.Int)])
-            input_layer.updateFields()
-            input_layer.commitChanges()
-
-        # Populate the "plotId" values
-        if not input_layer.isEditable():
-            input_layer.startEditing()
-        for idx, feature in enumerate(input_layer.getFeatures(), start=1):
-            feature["plotId"] = idx
-            input_layer.updateFeature(feature)
-        input_layer.commitChanges()
-
-        # Create the output layer
-        output_layer = self.createNewOutputLayer(input_layer, output_file)
-        if output_layer is None:
-            QgsMessageLog.logMessage("Failed to create new output layer.", "WhispAnalysis", Qgis.Critical)
+            QgsMessageLog.logMessage(
+                "Invalid selection. Ensure an input layer, output file, and at least one column are selected.",
+                "WhispAnalysis",
+                Qgis.Warning
+            )
             return
 
-        QgsProject.instance().addMapLayer(output_layer)
-        self.selected_output_layer = output_layer
-
-        self.ensure_required_fields(output_layer, selected_columns)
-        geojson = self.get_selected_layer_as_geojson(input_layer)
-        if not geojson:
-            return
-
-
-        # Create a modal progress dialog for the API call.
+        # Create and show the progress dialog immediately, before any heavy
+        # geometry preparation starts. The actual work is launched with
+        # QTimer.singleShot(0, ...) so Qt can paint the dialog first.
         processing_dialog = QDialog(self.iface.mainWindow())
         processing_dialog.setWindowTitle("Whisp")
         processing_dialog.setWindowIcon(QIcon(":/plugins/whisp_analysis/icon.png"))
         proc_layout = QVBoxLayout(processing_dialog)
-        progress_label = QLabel("Sending request to Whisp API...")
+
+        progress_label = QLabel("Preparing Whisp analysis...")
+        # Keep the label width stable while the animated dots change.
+        # This prevents layout recalculation that can make the busy/marquee
+        # progress bar appear to restart or re-render on every dot step.
+        progress_label.setMinimumWidth(360)
         proc_layout.addWidget(progress_label)
+
         progress_bar = QProgressBar()
-
-        num_features = input_layer.featureCount()
-        base_time_ms = 10000  # 10 seconds base time
-
-        geom_type = QgsWkbTypes.geometryType(input_layer.wkbType())
-        if geom_type == QgsWkbTypes.PointGeometry:
-            # 0.5 seconds per point (i.e., 500 ms per feature)
-            additional_time_ms = num_features * 500
-        elif geom_type == QgsWkbTypes.PolygonGeometry:
-            # Calculate total area in hectares and add 0.1 seconds (100 ms) per hectare.
-            d = QgsDistanceArea()
-            d.setEllipsoid("WGS84")  # use WGS84 ellipsoid for geodesic area calculation
-            total_hectares = 0.0
-            for feature in input_layer.getFeatures():
-                area_m2 = d.measureArea(feature.geometry())
-                total_hectares += area_m2 / 10000.0  # convert square meters to hectares
-            additional_time_ms = total_hectares * 100
-        else:
-            # Fallback: 40ms per second
-            additional_time_ms = num_features * 10
-
-        total_time_ms = base_time_ms + additional_time_ms
-        ticks = int(math.ceil(total_time_ms / 100.0))  # timer updates every 100ms
-        progress_bar.setRange(0, ticks)
-        progress_bar.setValue(0)
+        # Start in busy / indeterminate mode so the UI shows activity without
+        # inventing a fake percentage. The bar switches to 0-100 mode when
+        # the first real Whisp percentage arrives.
+        progress_bar.setRange(0, 0)
         proc_layout.addWidget(progress_bar)
 
-        # Add a Cancel button.
+        # Collapsible API feedback text box. Hidden by default; users can expand it
+        # with the disclosure button if they want to see the raw Whisp messages.
+        progress_output = QTextBrowser()
+        progress_output.setReadOnly(True)
+        progress_output.setMinimumHeight(160)
+        progress_output.setVisible(False)
+
+        details_visible = False
+        details_button = QPushButton("▸ Show details")
+        details_button.setFlat(True)
+        details_button.setStyleSheet("""
+            QPushButton {
+                text-align: left;
+                border: none;
+                padding: 2px;
+            }
+        """)
+
+        # Add Details on the bottom left and Cancel on the bottom right.
         btn_layout = QHBoxLayout()
+        btn_layout.addWidget(details_button)
         btn_layout.addStretch()
         cancel_button = QPushButton("Cancel")
         btn_layout.addWidget(cancel_button)
         proc_layout.addLayout(btn_layout)
+        proc_layout.addWidget(progress_output)
+
+        def toggle_progress_details():
+            nonlocal details_visible
+            details_visible = not details_visible
+            progress_output.setVisible(details_visible)
+            details_button.setText("▾ Details" if details_visible else "▸ Show details")
+            processing_dialog.adjustSize()
+
+        details_button.clicked.connect(toggle_progress_details)
 
         processing_dialog.setLayout(proc_layout)
         processing_dialog.show()
+        processing_dialog.raise_()
+        processing_dialog.activateWindow()
+        QApplication.processEvents()
 
-        # After 3 seconds, change the label text.
-        QTimer.singleShot(3000, lambda: progress_label.setText("Whisp API processing..."))
+        self.analysis_run_id = getattr(self, "analysis_run_id", 0) + 1
+        current_run_id = self.analysis_run_id
 
-        # Create a timer that updates the progress bar every 100ms.
-        timer = QTimer(processing_dialog)
-        timer.setInterval(100)
-        timer.timeout.connect(lambda: progress_bar.setValue(min(progress_bar.value() + 1, ticks)))
-        timer.start()
-
-        # Initialize cancellation flag.
         self.cancelled = False
+        self.selected_output_layer = None
+        self.selected_output_file = None
+        self.final_output_file = None
+        self.temp_output_file = None
+        self._last_progress_log_message = None
+        self._analysis_dot_base_text = "Preparing Whisp analysis"
+        self._analysis_dot_suffix = ""
+        self._analysis_dot_count = 0
+        self.analysis_dots_timer = QTimer(processing_dialog)
+        self.analysis_dots_timer.setInterval(500)
+
+        def update_analysis_dots():
+            if getattr(self, "analysis_run_id", None) != current_run_id or getattr(self, "cancelled", False):
+                return
+            self._analysis_dot_count = (self._analysis_dot_count + 1) % 4
+            dots = "." * self._analysis_dot_count
+            # Keep the text length stable: 0, 1, 2, 3 dots plus padding.
+            # This avoids relayout/repaint side effects while the marquee bar runs.
+            padded_dots = dots + (" " * (3 - self._analysis_dot_count))
+            suffix = getattr(self, "_analysis_dot_suffix", "")
+            progress_label.setText(f"{self._analysis_dot_base_text}{padded_dots}{suffix}")
+
+        self.analysis_dots_timer.timeout.connect(update_analysis_dots)
+        self.analysis_dots_timer.start()
+
+        def stop_analysis_dots():
+            if hasattr(self, "analysis_dots_timer") and self.analysis_dots_timer:
+                self.analysis_dots_timer.stop()
+
+        def start_analysis_dots(base_text, suffix=None):
+            base_text = base_text.rstrip(".")
+            if suffix is not None:
+                self._analysis_dot_suffix = suffix
+            timer_active = (
+                hasattr(self, "analysis_dots_timer")
+                and self.analysis_dots_timer
+                and self.analysis_dots_timer.isActive()
+            )
+
+            # If the animation is already running, do not reset the dot count.
+            # Only update the base text so the sequence stays 0,1,2,3,0,1,2,3...
+            self._analysis_dot_base_text = base_text
+            if timer_active:
+                dots = "." * self._analysis_dot_count
+                padded_dots = dots + (" " * (3 - self._analysis_dot_count))
+                suffix = getattr(self, "_analysis_dot_suffix", "")
+                progress_label.setText(f"{self._analysis_dot_base_text}{padded_dots}{suffix}")
+                return
+
+            self._analysis_dot_count = 0
+            suffix = getattr(self, "_analysis_dot_suffix", "")
+            progress_label.setText(f"{self._analysis_dot_base_text}{suffix}")
+            if hasattr(self, "analysis_dots_timer") and self.analysis_dots_timer:
+                self.analysis_dots_timer.start()
+
+        def append_progress_message(message):
+            if getattr(self, "analysis_run_id", None) != current_run_id or getattr(self, "cancelled", False):
+                return
+            if not message or progress_output is None:
+                return
+
+            clean_message = str(message).strip()
+            if not clean_message:
+                return
+
+            # Avoid writing the exact same status line repeatedly, but keep real
+            # progress lines because they change over time and are useful details.
+            if (
+                clean_message == getattr(self, "_last_progress_log_message", None)
+                and not clean_message.startswith("Progress:")
+            ):
+                return
+
+            self._last_progress_log_message = clean_message
+            progress_output.append(clean_message)
+
+        def set_step_status(message, log=True):
+            """
+            Log local preparation steps without bouncing the main label.
+
+            During local preparation, the main label stays as the calm, animated
+            "Preparing Whisp analysis..." message. Detailed sub-steps are
+            available in the expandable details box. Once the API request begins,
+            the main label is allowed to move to the sending / analysis states.
+            """
+            if getattr(self, "analysis_run_id", None) != current_run_id or getattr(self, "cancelled", False):
+                return
+
+            clean_message = str(message).strip() if message else ""
+            if not clean_message:
+                return
+
+            if log:
+                append_progress_message(clean_message)
+
+            # Keep preparation sub-steps out of the main label. They go only to
+            # the details log until the actual API request begins.
+            if clean_message.startswith("Sending request to Whisp API"):
+                start_analysis_dots("Sending request to Whisp API", suffix="")
+
+            QApplication.processEvents()
 
         def cancel_operation():
             self.cancelled = True
-            timer.stop()
+            stop_analysis_dots()
+
+            for timer_name in [
+                "smooth_progress_timer",
+                "progress_animation_timer",
+                "final_phase_timer",
+                "analysis_dots_timer",
+            ]:
+                timer = getattr(self, timer_name, None)
+                if timer:
+                    try:
+                        timer.stop()
+                    except Exception:
+                        pass
+
             try:
-                if self.thread is not None and self.thread.isRunning():
-                    self.thread.terminate()  # Forcefully terminate the thread.
+                if getattr(self, "worker", None) is not None:
+                    self.worker.cancel()
             except Exception as e:
-                QgsMessageLog.logMessage(f"Error terminating thread: {e}", "WhispAnalysis", Qgis.Warning)
+                QgsMessageLog.logMessage(f"Error cancelling worker: {e}", "WhispAnalysis", Qgis.Warning)
+
+            # Do not force-terminate the QThread unless absolutely necessary. The
+            # worker checks its cancel flag between network/status calls and emits
+            # a cancelled result; UI callbacks below ignore late signals by run id.
+            try:
+                if getattr(self, "thread", None) is not None and self.thread.isRunning():
+                    self.thread.requestInterruption()
+            except Exception as e:
+                QgsMessageLog.logMessage(f"Error requesting thread interruption: {e}", "WhispAnalysis", Qgis.Warning)
+
+            self.cleanup_cancelled_output()
             processing_dialog.reject()  # Close the progress dialog.
             for action in self.actions:
                 action.setEnabled(True)
             QgsMessageLog.logMessage("User cancelled the API call.", "WhispAnalysis", Qgis.Warning)
+
+            # Return the user to the main Whisp selection dialog after a cancel.
+            # Use a zero-delay timer so the current dialog closes cleanly first.
+            QTimer.singleShot(0, self.on_submit_geojson)
 
         cancel_button.clicked.connect(cancel_operation)
 
         for action in self.actions:
             action.setEnabled(False)
 
-        self.worker = WhispWorker(geojson, self.api_key)
-        self.thread = QThread()
-        self.worker.moveToThread(self.thread)
-        self.thread.started.connect(self.worker.run)
-        self.worker.finished.connect(lambda result: self.on_api_response_with_progress(result, timer, progress_bar, processing_dialog))
-        self.worker.progress.connect(lambda msg: progress_label.setText(msg))
-        self.worker.finished.connect(self.thread.quit)
-        self.worker.finished.connect(self.worker.deleteLater)
-        self.thread.finished.connect(self.thread.deleteLater)
-        self.thread.start()
+        QTimer.singleShot(0, lambda: self._continue_whisp_analysis(
+            input_layer,
+            output_file,
+            selected_columns,
+            unit_type,
+            selected_country_codes,
+            processing_dialog,
+            progress_label,
+            progress_bar,
+            progress_output,
+            append_progress_message,
+            start_analysis_dots,
+            stop_analysis_dots,
+            set_step_status,
+            current_run_id,
+        ))
 
+    def _continue_whisp_analysis(
+        self,
+        input_layer,
+        output_file,
+        selected_columns,
+        unit_type,
+        selected_country_codes,
+        processing_dialog,
+        progress_label,
+        progress_bar,
+        progress_output,
+        append_progress_message,
+        start_analysis_dots,
+        stop_analysis_dots,
+        set_step_status=None,
+        current_run_id=None,
+    ):
+        """Continue the Whisp workflow after the progress dialog has painted."""
 
+        if getattr(self, "cancelled", False) or (current_run_id is not None and getattr(self, "analysis_run_id", None) != current_run_id):
+            return
 
-    def on_api_response_with_progress(self, result, timer, progress_bar, processing_dialog):
-        timer.stop()
-        # Set the progress bar to its current maximum (i.e. API call phase complete)
-        current_max = progress_bar.maximum()
-        progress_bar.setValue(current_max)
-        
-        # Define an additional saving stage duration in milliseconds (3 seconds)
-        saving_time_ms = 5000  
-        saving_ticks = int(math.ceil(saving_time_ms / 100.0))
-        
-        # Extend the progress bar range to include the saving stage
-        new_max = current_max + saving_ticks
-        progress_bar.setRange(0, new_max)
-        progress_bar.setValue(current_max)
-        
-        # Immediately change the label text for the saving stage.
-        # (This will remain until the saving phase is complete.)
-        progress_label = processing_dialog.findChild(QLabel)
-        if progress_label:
-            progress_label.setText("Saving to output layer...")
-        
-        # Create a new timer to simulate the saving progress.
-        saving_timer = QTimer(processing_dialog)
-        saving_timer.setInterval(100)
-        
-        def update_saving_progress():
-            current_value = progress_bar.value()
-            if current_value < new_max:
-                progress_bar.setValue(current_value + 1)
-            else:
-                saving_timer.stop()
+        if set_step_status is None:
+            def set_step_status(message, log=True):
+                clean_message = str(message).strip() if message else ""
+                if log and clean_message:
+                    append_progress_message(clean_message)
+                if clean_message.startswith("Sending request to Whisp API"):
+                    start_analysis_dots("Sending request to Whisp API", suffix="")
+                QApplication.processEvents()
+
+        try:
+            # Immediately convert the input layer to EPSG:4326 only if needed.
+            # Do not show a misleading conversion message when the layer is already EPSG:4326.
+            if input_layer.crs().authid() != "EPSG:4326":
+                set_step_status("Converting input layer to EPSG:4326...")
+                input_layer = self.convert_to_epsg4326(input_layer)
+
+            if getattr(self, "cancelled", False):
+                return
+
+            set_step_status("Preparing geometries...")
+
+            # ——— Manual flatten + backlink ID ———
+            # 1) Copy original fields into a new QgsFields and add 'link_id'
+            orig_fields = input_layer.fields()
+            fields = QgsFields()
+            for f in orig_fields:
+                fields.append(f)
+            # only add link_id if not already present
+            if 'link_id' not in [f.name() for f in fields]:
+                fields.append(QgsField('link_id', QVariant.String))
+
+            # 2) Create an in-memory layer with those fields
+            mem = QgsVectorLayer(
+                f"{QgsWkbTypes.displayString(input_layer.wkbType())}?crs=EPSG:4326",
+                "flattened",
+                "memory"
+            )
+            mem.dataProvider().addAttributes(fields)
+            mem.updateFields()
+
+            # 3) Iterate, explode and back-link
+            for orig_idx, feat in enumerate(input_layer.getFeatures(), start=1):
+                if getattr(self, "cancelled", False):
+                    return
+                geom = feat.geometry()
+                wkb = geom.wkbType()
+                # decide how to split
+                if QgsWkbTypes.isMultiType(wkb):
+                    flat = QgsWkbTypes.flatType(wkb)
+                    if flat == QgsWkbTypes.PolygonGeometry:
+                        parts = geom.asMultiPolygon()
+                        maker = lambda poly: QgsGeometry.fromPolygonXY(poly)
+                    elif flat == QgsWkbTypes.PointGeometry:
+                        parts = geom.asMultiPoint()
+                        maker = lambda pt: QgsGeometry.fromPointXY(pt)
+                    else:
+                        parts = geom.asGeometryCollection()
+                        maker = lambda g: g
+                else:
+                    # single‐part: wrap into a list
+                    parts = [geom]
+                    maker = lambda g: g
+
+                for part_idx, part in enumerate(parts, start=1):
+                    subgeom = maker(part)
+                    new_feat = QgsFeature(fields)
+                    # copy original attributes + space for link_id
+                    attrs = feat.attributes() + [None]
+                    new_feat.setAttributes(attrs)
+                    new_feat.setGeometry(subgeom)
+                    new_feat['link_id'] = f"geom{orig_idx}_feat{part_idx}"
+                    mem.dataProvider().addFeatures([new_feat])
+
+                # Keep the UI responsive during large geometry loops.
+                if orig_idx % 100 == 0:
+                    QApplication.processEvents()
+
+            input_layer = mem
+            QgsMessageLog.logMessage("Manual flatten complete; created link_id field.", "WhispAnalysis", Qgis.Info)
+            # ——————————————————————————————
+
+            # Force normalization if the layer's attribute schema is empty
+            # (Even if the layer reports fields, check if the attributes are effectively empty.)
+            features = list(input_layer.getFeatures())
+            if input_layer.fields().count() == 0 or (features and len(features[0].attributes()) == 0):
+                set_step_status("Normalizing input layer...")
+                QgsMessageLog.logMessage("Normalizing layer: exporting to temporary GeoJSON with properties.", "WhispAnalysis", Qgis.Info)
+                temp_geojson_path = self.export_layer_with_properties(input_layer)
+                input_layer = QgsVectorLayer(temp_geojson_path, "TempLayer", "ogr")
+                if not input_layer.isValid():
+                    QgsMessageLog.logMessage("Failed to load temporary layer with properties.", "WhispAnalysis", Qgis.Critical)
+                    processing_dialog.close()
+                    for action in self.actions:
+                        action.setEnabled(True)
+                    return
+
+            # If the input layer already contains any columns from the current
+            # Whisp output schema, strip those old Whisp result columns from the
+            # working copy before adding fresh results. The API request itself
+            # already sends only geometry + external_id, but this keeps the
+            # output layer clean when re-analyzing a previous Whisp output.
+            existing_whisp_fields = set(field.name() for field in input_layer.fields()).intersection(set(self.whisp_columns_mapping.keys()))
+            if existing_whisp_fields:
+                msg_box = QMessageBox(processing_dialog)
+                msg_box.setIcon(QMessageBox.NoIcon)
+                msg_box.setWindowTitle("Whisp analysis columns found")
+                msg_box.setText(
+                    "The input file contains Whisp analysis columns.\n"
+                    "These columns will be replaced in the output file."
+                )
+                ok_button = msg_box.addButton("OK", QMessageBox.AcceptRole)
+                cancel_button = msg_box.addButton("Cancel", QMessageBox.RejectRole)
+                msg_box.setDefaultButton(ok_button)
+                msg_box.exec_()
+
+                if msg_box.clickedButton() != ok_button:
+                    self.cancelled = True
+                    try:
+                        stop_analysis_dots()
+                    except Exception:
+                        pass
+                    try:
+                        processing_dialog.reject()
+                    except Exception:
+                        processing_dialog.close()
+                    for action in self.actions:
+                        action.setEnabled(True)
+                    QTimer.singleShot(0, self.on_submit_geojson)
+                    return
+
+                set_step_status("Creating clean copy for re-analysis...")
+                QgsMessageLog.logMessage(
+                    f"Input layer contains existing Whisp fields ({len(existing_whisp_fields)}). "
+                    "Creating a clean copy before re-analysis.",
+                    "WhispAnalysis",
+                    Qgis.Info
+                )
+                input_layer = self.create_clean_layer(input_layer, fields_to_remove=existing_whisp_fields)
+                if input_layer is None or not input_layer.isValid():
+                    QgsMessageLog.logMessage("Failed to create clean input layer for re-analysis.", "WhispAnalysis", Qgis.Critical)
+                    processing_dialog.close()
+                    for action in self.actions:
+                        action.setEnabled(True)
+                    return
+
+            # Process the output file name
+            if not os.path.isabs(output_file):
+                input_source = input_layer.source()
+                input_dir = os.path.dirname(input_source) if input_source else ""
+                output_file = os.path.join(input_dir, output_file)
+            if not output_file.lower().endswith(".geojson"):
+                output_file += ".geojson"
+
+            # Write to a temporary sibling file first. The user-selected final
+            # file is only replaced after the full analysis and result writing
+            # succeeds. This protects existing files, including the input file,
+            # if the user cancels or the analysis fails.
+            final_output_file = output_file
+            base, ext = os.path.splitext(final_output_file)
+            if not ext:
+                ext = ".geojson"
+            temp_output_file = f"{base}.whisp_tmp{ext}"
+
+            # Remove an old temp file from a previous interrupted run, but never
+            # remove the final output file here.
+            self._delete_output_sidecars(temp_output_file)
+
+            self.final_output_file = final_output_file
+            self.temp_output_file = temp_output_file
+            self.selected_output_file = temp_output_file
+
+            set_step_status("Creating output layer...")
+
+            # Create the temporary output layer. It will be renamed/replaced to
+            # the final user-selected file only after a successful run.
+            output_layer = self.createNewOutputLayer(
+                input_layer,
+                temp_output_file,
+                layer_name=os.path.basename(final_output_file)
+            )
+            if output_layer is None:
+                QgsMessageLog.logMessage("Failed to create new output layer.", "WhispAnalysis", Qgis.Critical)
                 processing_dialog.close()
-                QApplication.processEvents()  # ensure UI updates
                 for action in self.actions:
                     action.setEnabled(True)
-                # Now immediately trigger the API response handling (success dialog)
-                self.on_api_response(result)
-        
-        saving_timer.timeout.connect(update_saving_progress)
-        saving_timer.start()
+                return
+
+            QgsProject.instance().addMapLayer(output_layer)
+            self.selected_output_layer = output_layer
+
+            # #### NEW: add country-specific nXX_… columns to the selection ####
+            if selected_country_codes:
+                pattern = re.compile(r"^n([A-Z]{2})_")
+
+                national_cols_to_add = []
+                for col_name in self.whisp_columns_mapping.keys():
+                    m = pattern.match(col_name)
+                    if not m:
+                        continue
+                    iso2 = m.group(1).lower()
+                    if iso2 in selected_country_codes:
+                        national_cols_to_add.append(col_name)
+
+                # Avoid duplicates
+                existing = set(selected_columns)
+                for col in national_cols_to_add:
+                    if col not in existing:
+                        selected_columns.append(col)
+                        existing.add(col)
+            # #### END NEW BLOCK ####
+
+            self.ensure_required_fields(output_layer, selected_columns)
+
+            set_step_status("Preparing request for Whisp API...")
+
+            geojson = self.get_selected_layer_as_geojson(input_layer, unit_type, selected_country_codes)
+            if not geojson:
+                processing_dialog.close()
+                for action in self.actions:
+                    action.setEnabled(True)
+                return
+
+            if getattr(self, "cancelled", False):
+                return
+
+            # Progress animation state. The progress bar stays in busy mode until
+            # the first real Whisp percentage arrives. API progress is mapped to
+            # 0-90%; after Whisp reports the final batch, the final 10% advances
+            # at one percent per second.
+            self.request_start_time = time.time()
+            self.real_progress_started = False
+            self.latest_real_percent = 0
+            self.target_progress_value = 0
+            self.final_phase_started = False
+            self.final_phase_start_time = None
+
+            # Smoothly animate the displayed bar toward self.target_progress_value.
+            # API updates only change the target; the UI moves toward it gradually.
+            self.progress_animation_timer = QTimer(processing_dialog)
+            self.progress_animation_timer.setInterval(50)
+
+            def animate_progress_bar():
+                if getattr(self, "cancelled", False) or (current_run_id is not None and getattr(self, "analysis_run_id", None) != current_run_id):
+                    return
+                if progress_bar.maximum() == 0:
+                    return
+
+                current_value = progress_bar.value()
+                target_value = int(max(0, min(100, getattr(self, "target_progress_value", current_value))))
+
+                if current_value < target_value:
+                    progress_bar.setValue(current_value + 1)
+                elif current_value > target_value:
+                    # Do not animate backwards slowly; snap down only if needed.
+                    progress_bar.setValue(target_value)
+
+            self.progress_animation_timer.timeout.connect(animate_progress_bar)
+
+            # Final 10% phase. This starts when the API reports the final batch
+            # (e.g. 142/142 batches), not when local saving starts. It advances
+            # from 90 to 99 at one percent per second; 100 is reserved for actual
+            # completion after the output layer has been updated.
+            self.final_phase_timer = QTimer(processing_dialog)
+            self.final_phase_timer.setInterval(250)
+
+            def update_final_phase_progress():
+                if getattr(self, "cancelled", False) or (current_run_id is not None and getattr(self, "analysis_run_id", None) != current_run_id):
+                    return
+                if not getattr(self, "final_phase_started", False):
+                    return
+                if self.final_phase_start_time is None:
+                    return
+
+                elapsed = max(0.0, time.time() - self.final_phase_start_time)
+                final_value = min(99, 90 + int(elapsed))
+                if final_value > getattr(self, "target_progress_value", 0):
+                    self.target_progress_value = final_value
+
+            self.final_phase_timer.timeout.connect(update_final_phase_progress)
+
+            def start_final_phase():
+                if getattr(self, "cancelled", False) or (current_run_id is not None and getattr(self, "analysis_run_id", None) != current_run_id):
+                    return
+                if getattr(self, "final_phase_started", False):
+                    return
+
+                self.final_phase_started = True
+                self.final_phase_start_time = time.time()
+
+                if progress_bar.maximum() == 0:
+                    progress_bar.setRange(0, 100)
+
+                self.target_progress_value = max(90, int(getattr(self, "target_progress_value", 0)))
+
+                if hasattr(self, "progress_animation_timer") and self.progress_animation_timer and not self.progress_animation_timer.isActive():
+                    self.progress_animation_timer.start()
+
+                # Reuse the same dot animation for the saving label.
+                start_analysis_dots("Saving Whisp results to output layer", suffix="")
+
+                if hasattr(self, "final_phase_timer") and self.final_phase_timer and not self.final_phase_timer.isActive():
+                    self.final_phase_timer.start()
+
+            self.worker = WhispWorker(geojson, self.api_key)
+            self.thread = QThread()
+            self.worker.moveToThread(self.thread)
+
+            def update_progress_text(message):
+                if getattr(self, "cancelled", False) or (current_run_id is not None and getattr(self, "analysis_run_id", None) != current_run_id):
+                    return
+                if not message:
+                    return
+
+                clean_message = str(message).strip()
+                if not clean_message:
+                    return
+
+                append_progress_message(clean_message)
+
+                if clean_message.startswith("Progress:"):
+                    match = re.search(r"Progress:\s*(\d+)\s*/\s*(\d+)\s*batches", clean_message)
+                    if match:
+                        done_batches = int(match.group(1))
+                        total_batches = int(match.group(2))
+                        batch_suffix = f" ({done_batches}/{total_batches} batches)"
+
+                        if total_batches > 0 and done_batches >= total_batches:
+                            # The API has finished all batches. Start the final 10%
+                            # immediately and switch the label to the saving phase.
+                            start_final_phase()
+                        elif not getattr(self, "final_phase_started", False):
+                            # Keep the animated analysis label running and show only
+                            # the batch count in brackets.
+                            start_analysis_dots("Analysis in progress", suffix=batch_suffix)
+                    elif not getattr(self, "final_phase_started", False):
+                        start_analysis_dots("Analysis in progress", suffix=getattr(self, "_analysis_dot_suffix", ""))
+                    return
+
+                if clean_message.startswith("Sending request to Whisp API"):
+                    if not getattr(self, "final_phase_started", False):
+                        start_analysis_dots("Sending request to Whisp API", suffix="")
+                    return
+
+                if clean_message.startswith("Analysis in progress"):
+                    if not getattr(self, "final_phase_started", False):
+                        start_analysis_dots("Analysis in progress", suffix=getattr(self, "_analysis_dot_suffix", ""))
+                    return
+
+                if clean_message.startswith("Whisp Analysis completed successfully"):
+                    start_final_phase()
+                    return
+
+                if not getattr(self, "final_phase_started", False):
+                    stop_analysis_dots()
+                    progress_label.setText(clean_message)
+
+            def update_progress_percent(percent):
+                if getattr(self, "cancelled", False) or (current_run_id is not None and getattr(self, "analysis_run_id", None) != current_run_id):
+                    return
+                # Map real Whisp API progress to the first 90% of the progress bar.
+                # Do not directly set the bar; update the target and let the
+                # animation timer move the displayed value smoothly.
+                if getattr(self, "final_phase_started", False):
+                    return
+
+                try:
+                    api_percent = max(0, min(100, int(percent)))
+                except Exception:
+                    return
+
+                display_percent = min(90, int(round(api_percent * 0.9)))
+
+                if not self.real_progress_started:
+                    self.real_progress_started = True
+                    progress_bar.setRange(0, 100)
+                    if hasattr(self, "progress_animation_timer") and self.progress_animation_timer and not self.progress_animation_timer.isActive():
+                        self.progress_animation_timer.start()
+
+                self.latest_real_percent = max(self.latest_real_percent, display_percent)
+                self.target_progress_value = max(
+                    int(getattr(self, "target_progress_value", 0)),
+                    self.latest_real_percent
+                )
+
+            set_step_status("Sending request to Whisp API...")
+            start_analysis_dots("Sending request to Whisp API")
+            QApplication.processEvents()
+
+            self.thread.started.connect(self.worker.run)
+
+            def handle_worker_finished(result):
+                if (
+                    getattr(self, "cancelled", False)
+                    or (current_run_id is not None and getattr(self, "analysis_run_id", None) != current_run_id)
+                    or (isinstance(result, dict) and result.get("cancelled"))
+                ):
+                    return
+                self.on_api_response_with_progress(result, progress_bar, processing_dialog)
+
+            self.worker.finished.connect(handle_worker_finished)
+            self.worker.progress.connect(update_progress_text)
+            self.worker.progress_percent.connect(update_progress_percent)
+            self.worker.finished.connect(self.thread.quit)
+            self.worker.finished.connect(self.worker.deleteLater)
+            self.thread.finished.connect(self.thread.deleteLater)
+            self.thread.start()
+
+        except Exception as e:
+            stop_analysis_dots()
+            if hasattr(self, "smooth_progress_timer") and self.smooth_progress_timer:
+                self.smooth_progress_timer.stop()
+            if hasattr(self, "progress_animation_timer") and self.progress_animation_timer:
+                self.progress_animation_timer.stop()
+            if hasattr(self, "final_phase_timer") and self.final_phase_timer:
+                self.final_phase_timer.stop()
+            self.cleanup_cancelled_output()
+            processing_dialog.close()
+            for action in self.actions:
+                action.setEnabled(True)
+            QgsMessageLog.logMessage(f"Whisp processing failed before API submission: {e}", "WhispAnalysis", Qgis.Critical)
+            QMessageBox.critical(
+                self.iface.mainWindow(),
+                "Whisp Error",
+                f"Whisp processing failed before API submission:\n{e}"
+            )
+
+    def _output_sidecar_paths(self, path):
+        """Return common sidecar metadata paths that may accompany a GeoJSON."""
+        if not path:
+            return []
+        return [
+            path + ".aux.xml",
+            path + ".qmd",
+            path + ".qml",
+        ]
+
+    def _delete_output_sidecars(self, path):
+        """Delete a GeoJSON path and common sidecars if they exist."""
+        if not path:
+            return
+        for candidate in [path] + self._output_sidecar_paths(path):
+            try:
+                if candidate and os.path.exists(candidate):
+                    os.remove(candidate)
+            except Exception as e:
+                QgsMessageLog.logMessage(
+                    f"Could not delete output file {candidate}: {e}",
+                    "WhispAnalysis",
+                    Qgis.Warning,
+                )
+
+    def cleanup_cancelled_output(self):
+        """
+        Remove a partially created Whisp temporary output layer and its temp files.
+
+        The final user-selected output file is never deleted here. This protects
+        existing files and prevents data loss when the user chose the same path as
+        the input file or overwrote an existing output path.
+        """
+        try:
+            output_layer = getattr(self, "selected_output_layer", None)
+
+            if output_layer is not None:
+                try:
+                    if output_layer.isEditable():
+                        output_layer.rollBack()
+                except Exception as e:
+                    QgsMessageLog.logMessage(
+                        f"Could not roll back output layer edits during cancellation: {e}",
+                        "WhispAnalysis",
+                        Qgis.Warning,
+                    )
+
+                try:
+                    QgsProject.instance().removeMapLayer(output_layer.id())
+                    QApplication.processEvents()
+                except Exception as e:
+                    QgsMessageLog.logMessage(
+                        f"Could not remove cancelled output layer from project: {e}",
+                        "WhispAnalysis",
+                        Qgis.Warning,
+                    )
+
+                self.selected_output_layer = None
+
+            # Only delete the plugin-created temporary file. Never delete the
+            # final user-selected path during cancellation/failure cleanup.
+            temp_file = getattr(self, "temp_output_file", None) or getattr(self, "selected_output_file", None)
+            final_file = getattr(self, "final_output_file", None)
+            if temp_file and os.path.abspath(temp_file) != os.path.abspath(final_file or ""):
+                self._delete_output_sidecars(temp_file)
+
+            self.selected_output_file = None
+            self.temp_output_file = None
+
+        except Exception as e:
+            QgsMessageLog.logMessage(
+                f"Cancel cleanup failed: {e}",
+                "WhispAnalysis",
+                Qgis.Warning,
+            )
 
 
+    def _set_geojson_collection_name(self, geojson_file, display_name):
+        """
+        Ensure the finalized GeoJSON carries the intended collection/layer name.
 
-    def createNewOutputLayer(self, input_layer, output_file):
+        QGIS/OGR can infer a layer name from the temporary *.whisp_tmp.geojson
+        filename while the file is being edited. If that name is persisted in
+        the GeoJSON, later opening the final file in a different QGIS project can
+        show the temporary suffix. This rewrites only the top-level "name".
+        """
+        try:
+            with open(geojson_file, "r", encoding="utf-8") as f:
+                data = json.load(f)
+
+            if isinstance(data, dict):
+                data["name"] = display_name
+                with open(geojson_file, "w", encoding="utf-8") as f:
+                    json.dump(data, f)
+
+        except Exception as e:
+            QgsMessageLog.logMessage(
+                f"Could not set GeoJSON collection name for {geojson_file}: {e}",
+                "WhispAnalysis",
+                Qgis.Warning,
+            )
+
+    def finalize_temp_output_file(self):
+        """
+        Replace the final output file with the fully written temporary file.
+
+        Returns True on success. On failure, leaves the temp file in place and
+        reports the error instead of deleting or damaging the final file.
+
+        On Windows, QGIS/OGR can keep GeoJSON file handles open briefly after a
+        layer is committed/removed. This method therefore releases the temp layer,
+        clears Python references, processes Qt events, and retries os.replace().
+        """
+        temp_file = getattr(self, "temp_output_file", None)
+        final_file = getattr(self, "final_output_file", None)
+
+        if not temp_file or not final_file:
+            QgsMessageLog.logMessage(
+                "finalize_temp_output_file called without temp/final paths.",
+                "WhispAnalysis",
+                Qgis.Warning,
+            )
+            return False
+
+        temp_file = os.path.abspath(temp_file)
+        final_file = os.path.abspath(final_file)
+
+        if not os.path.exists(temp_file):
+            QgsMessageLog.logMessage(
+                f"Temporary output file does not exist: {temp_file}",
+                "WhispAnalysis",
+                Qgis.Critical,
+            )
+            return False
+
+        def layer_source_path(layer):
+            try:
+                src = layer.source().split("|")[0]
+                return os.path.abspath(src)
+            except Exception:
+                return ""
+
+        # 1) Commit and remove the temporary output layer from QGIS so GDAL/OGR
+        # releases its handle on the temp GeoJSON before os.replace().
+        output_layer = getattr(self, "selected_output_layer", None)
+        if output_layer is not None:
+            try:
+                if output_layer.isEditable():
+                    output_layer.commitChanges()
+            except Exception as e:
+                QgsMessageLog.logMessage(
+                    f"Could not commit temp layer before finalizing output: {e}",
+                    "WhispAnalysis",
+                    Qgis.Warning,
+                )
+
+            try:
+                QgsProject.instance().removeMapLayer(output_layer.id())
+            except Exception as e:
+                QgsMessageLog.logMessage(
+                    f"Could not remove temp layer before finalizing output: {e}",
+                    "WhispAnalysis",
+                    Qgis.Warning,
+                )
+
+            self.selected_output_layer = None
+            output_layer = None
+            QApplication.processEvents()
+            gc.collect()
+            QApplication.processEvents()
+
+        # 2) If an older version of the final output file is loaded in QGIS,
+        # remove it before replacing the file. This avoids Windows file locks
+        # when the user overwrites an already-open previous output layer.
+        try:
+            layers_to_remove = []
+            for layer in QgsProject.instance().mapLayers().values():
+                src_path = layer_source_path(layer)
+                if src_path and src_path in {temp_file, final_file}:
+                    layers_to_remove.append(layer.id())
+
+            for layer_id in layers_to_remove:
+                try:
+                    QgsProject.instance().removeMapLayer(layer_id)
+                except Exception as e:
+                    QgsMessageLog.logMessage(
+                        f"Could not remove existing output layer before replacement: {e}",
+                        "WhispAnalysis",
+                        Qgis.Warning,
+                    )
+
+            if layers_to_remove:
+                QApplication.processEvents()
+                gc.collect()
+                QApplication.processEvents()
+        except Exception as e:
+            QgsMessageLog.logMessage(
+                f"Could not inspect loaded layers before output replacement: {e}",
+                "WhispAnalysis",
+                Qgis.Warning,
+            )
+
+        # 3) Replace the final GeoJSON only after the temp output is complete.
+        # Retry because Windows may release QGIS/OGR file handles slightly late.
+        last_error = None
+        replaced = False
+        for attempt in range(20):
+            try:
+                os.replace(temp_file, final_file)
+                replaced = True
+                last_error = None
+                break
+            except PermissionError as e:
+                last_error = e
+                QApplication.processEvents()
+                gc.collect()
+                time.sleep(0.25)
+            except OSError as e:
+                # WinError 32 can also arrive as a generic OSError depending on
+                # the Python/QGIS runtime. Retry only for sharing/permission-like
+                # file lock errors; fail immediately for unrelated errors.
+                last_error = e
+                if getattr(e, "winerror", None) == 32 or getattr(e, "errno", None) in (13,):
+                    QApplication.processEvents()
+                    gc.collect()
+                    time.sleep(0.25)
+                    continue
+                break
+            except Exception as e:
+                last_error = e
+                break
+
+        if not replaced:
+            QgsMessageLog.logMessage(
+                f"Could not replace final output file {final_file} with {temp_file}: {last_error}",
+                "WhispAnalysis",
+                Qgis.Critical,
+            )
+            QMessageBox.critical(
+                self.iface.mainWindow(),
+                "Output Error",
+                "Whisp analysis finished, but the temporary output file could not replace the final output file.\n\n"
+                "This usually means QGIS or another program is still using one of the files.\n\n"
+                f"Temporary file:\n{temp_file}\n\n"
+                f"Final file:\n{final_file}\n\n"
+                "The original final file was left untouched. The temporary result file was kept for recovery."
+            )
+            return False
+
+        # Remove temp sidecars if any were created. Existing final sidecars are
+        # not removed automatically, except where they are explicitly temp
+        # sidecars created by this run.
+        for sidecar in self._output_sidecar_paths(temp_file):
+            try:
+                if os.path.exists(sidecar):
+                    os.remove(sidecar)
+            except Exception as e:
+                QgsMessageLog.logMessage(
+                    f"Could not delete temporary sidecar file {sidecar}: {e}",
+                    "WhispAnalysis",
+                    Qgis.Warning,
+                )
+
+        final_display_name = os.path.basename(final_file)
+        self._set_geojson_collection_name(final_file, final_display_name)
+
+        # 4) Load the finalized output file back into QGIS.
+        final_layer = self.iface.addVectorLayer(final_file, final_display_name, "ogr")
+        QApplication.processEvents()
+        if not final_layer:
+            QgsMessageLog.logMessage(
+                f"Final output file was written but could not be loaded: {final_file}",
+                "WhispAnalysis",
+                Qgis.Warning,
+            )
+            self.selected_output_file = final_file
+            self.final_output_file = final_file
+            self.temp_output_file = None
+            return True
+
+        self.selected_output_layer = final_layer
+        self.selected_output_file = final_file
+        self.final_output_file = final_file
+        self.temp_output_file = None
+        return True
+
+
+    def on_api_response_with_progress(self, result, progress_bar, processing_dialog):
+        """
+        Called when the WhispWorker finishes (either sync or async).
+        The API phase uses 0-90%. The final 10% starts when the API reports
+        the final batch and advances at one percent per second; 100% is shown
+        only after results are actually appended to the output layer.
+        """
+
+        progress_label = processing_dialog.findChild(QLabel)
+
+        if getattr(self, "cancelled", False) or (isinstance(result, dict) and result.get("cancelled")):
+            if hasattr(self, "progress_animation_timer") and self.progress_animation_timer:
+                self.progress_animation_timer.stop()
+            if hasattr(self, "final_phase_timer") and self.final_phase_timer:
+                self.final_phase_timer.stop()
+            if hasattr(self, "analysis_dots_timer") and self.analysis_dots_timer:
+                self.analysis_dots_timer.stop()
+            self.cleanup_cancelled_output()
+            processing_dialog.close()
+            for action in self.actions:
+                action.setEnabled(True)
+            return
+
+        # If there was an error, just close the dialog and let on_api_response handle it.
+        if "error" in result:
+            if hasattr(self, "progress_animation_timer") and self.progress_animation_timer:
+                self.progress_animation_timer.stop()
+            if hasattr(self, "final_phase_timer") and self.final_phase_timer:
+                self.final_phase_timer.stop()
+            if hasattr(self, "analysis_dots_timer") and self.analysis_dots_timer:
+                self.analysis_dots_timer.stop()
+
+            self.cleanup_cancelled_output()
+            processing_dialog.close()
+            QApplication.processEvents()
+            for action in self.actions:
+                action.setEnabled(True)
+            self.on_api_response(result)
+            return
+
+        # If the final batch message was missed for any reason, start the final
+        # phase now. This keeps 90-100 reserved for local result handling.
+        if not getattr(self, "final_phase_started", False):
+            self.final_phase_started = True
+            self.final_phase_start_time = time.time()
+            if progress_bar.maximum() == 0:
+                progress_bar.setRange(0, 100)
+            self.target_progress_value = max(90, int(getattr(self, "target_progress_value", 0)))
+            if progress_label:
+                self._analysis_dot_base_text = "Saving Whisp results to output layer"
+                self._analysis_dot_suffix = ""
+                self._analysis_dot_count = 0
+                progress_label.setText("Saving Whisp results to output layer")
+            if hasattr(self, "analysis_dots_timer") and self.analysis_dots_timer and not self.analysis_dots_timer.isActive():
+                self.analysis_dots_timer.start()
+            if hasattr(self, "progress_animation_timer") and self.progress_animation_timer and not self.progress_animation_timer.isActive():
+                self.progress_animation_timer.start()
+            if hasattr(self, "final_phase_timer") and self.final_phase_timer and not self.final_phase_timer.isActive():
+                self.final_phase_timer.start()
+
+        # Extract API data (same logic as in on_api_response).
+        features = result.get("data", {}).get("features") or result.get("features", [])
+        api_data = [feat["properties"] for feat in features]
+
+        # Actually apply attributes. The progress bar is intentionally not driven
+        # by append_data_to_layer; the final 10% is time-based from the final API
+        # batch feedback.
+        layer = self.selected_output_layer
+        if layer and api_data:
+            self.append_data_to_layer(layer, api_data)
+            if getattr(self, "cancelled", False):
+                self.cleanup_cancelled_output()
+                processing_dialog.close()
+                for action in self.actions:
+                    action.setEnabled(True)
+                return
+        else:
+            QgsMessageLog.logMessage(
+                "No output layer or empty API data; nothing to append.",
+                "WhispAnalysis",
+                Qgis.Warning,
+            )
+
+        # Atomically replace the user-selected final output only after the temp
+        # layer has been fully written and updated. If this fails, keep the
+        # original final file untouched and leave the temp file for recovery.
+        if getattr(self, "cancelled", False):
+            self.cleanup_cancelled_output()
+            processing_dialog.close()
+            for action in self.actions:
+                action.setEnabled(True)
+            return
+
+        if not self.finalize_temp_output_file():
+            if hasattr(self, "final_phase_timer") and self.final_phase_timer:
+                self.final_phase_timer.stop()
+            if hasattr(self, "progress_animation_timer") and self.progress_animation_timer:
+                self.progress_animation_timer.stop()
+            if hasattr(self, "analysis_dots_timer") and self.analysis_dots_timer:
+                self.analysis_dots_timer.stop()
+            processing_dialog.close()
+            QApplication.processEvents()
+            for action in self.actions:
+                action.setEnabled(True)
+            return
+
+        # Continue the final phase until 10 seconds have passed since the final
+        # API feedback, i.e. 1% per second from 90 to 99. If local saving took
+        # longer than that, this loop ends immediately and 100 is shown below.
+        while (
+            getattr(self, "final_phase_start_time", None) is not None
+            and time.time() - self.final_phase_start_time < 10
+        ):
+            if getattr(self, "cancelled", False):
+                self.cleanup_cancelled_output()
+                processing_dialog.close()
+                for action in self.actions:
+                    action.setEnabled(True)
+                return
+            elapsed = max(0.0, time.time() - self.final_phase_start_time)
+            self.target_progress_value = max(
+                int(getattr(self, "target_progress_value", 0)),
+                min(99, 90 + int(elapsed))
+            )
+            QApplication.processEvents()
+            time.sleep(0.05)
+
+        # Now the local work is done and the final-10% duration has elapsed.
+        # Animate to 100, then stop the timers and close the dialog.
+        self.target_progress_value = 100
+        if progress_bar.maximum() == 0:
+            progress_bar.setRange(0, 100)
+        if hasattr(self, "progress_animation_timer") and self.progress_animation_timer and not self.progress_animation_timer.isActive():
+            self.progress_animation_timer.start()
+
+        while progress_bar.value() < 100:
+            if getattr(self, "cancelled", False):
+                self.cleanup_cancelled_output()
+                processing_dialog.close()
+                for action in self.actions:
+                    action.setEnabled(True)
+                return
+            QApplication.processEvents()
+            time.sleep(0.02)
+
+        if hasattr(self, "final_phase_timer") and self.final_phase_timer:
+            self.final_phase_timer.stop()
+        if hasattr(self, "progress_animation_timer") and self.progress_animation_timer:
+            self.progress_animation_timer.stop()
+        if hasattr(self, "analysis_dots_timer") and self.analysis_dots_timer:
+            self.analysis_dots_timer.stop()
+
+        if progress_label:
+            progress_label.setText("Saving Whisp results to output layer...")
+        progress_bar.setValue(100)
+        QApplication.processEvents()
+
+        # Close dialog and re-enable actions.
+        processing_dialog.close()
+        QApplication.processEvents()
+        for action in self.actions:
+            action.setEnabled(True)
+
+        # Final success message (same text as before).
+        msg_box = QMessageBox(self.iface.mainWindow())
+        msg_box.setWindowIcon(QIcon(":/plugins/whisp_analysis/icon.png"))
+        msg_box.setIcon(QMessageBox.Information)
+        msg_box.setWindowTitle("Whisp")
+        msg_box.setText(
+            "Geometries successfully analyzed with Whisp!\n\n"
+            "Values appended to the output layer."
+        )
+        msg_box.exec_()
+
+
+    def createNewOutputLayer(self, input_layer, output_file, layer_name=None):
         """
         Write out the given layer as GeoJSON by hand (geometry + ALL properties),
         converting any non-serializable values via str(), so json.dump never fails.
         """
         features = []
-        for feat in input_layer.getFeatures():
+        for feat_idx, feat in enumerate(input_layer.getFeatures(), start=1):
+            # Keep the UI responsive while building the output GeoJSON.
+            if feat_idx % 100 == 0:
+                QApplication.processEvents()
+
             # 1) geometry as dict
             geom = json.loads(feat.geometry().asJson())
 
@@ -1391,7 +3285,17 @@ class whisp_analysis:
                 "properties": props
             })
 
-        fc = {"type": "FeatureCollection", "features": features}
+        display_name = layer_name or os.path.basename(output_file)
+
+        # Include an explicit GeoJSON collection name. QGIS/OGR may otherwise
+        # infer and persist the layer name from the temporary *.whisp_tmp.geojson
+        # path, which can later show up when the finalized file is opened in a
+        # different QGIS project.
+        fc = {
+            "type": "FeatureCollection",
+            "name": display_name,
+            "features": features
+        }
 
         # 3) ensure output folder exists
         out_dir = os.path.dirname(output_file)
@@ -1399,9 +3303,11 @@ class whisp_analysis:
             os.makedirs(out_dir, exist_ok=True)
 
         # 4) write it out
+        QApplication.processEvents()
         try:
             with open(output_file, "w", encoding="utf-8") as f:
                 json.dump(fc, f)
+            QApplication.processEvents()
         except Exception as e:
             QgsMessageLog.logMessage(
                 f"Error writing GeoJSON by hand: {e}",
@@ -1411,7 +3317,9 @@ class whisp_analysis:
             return None
 
         # 5) load into QGIS
-        new_layer = self.iface.addVectorLayer(output_file, os.path.basename(output_file), "ogr")
+        QApplication.processEvents()
+        new_layer = self.iface.addVectorLayer(output_file, display_name, "ogr")
+        QApplication.processEvents()
         if not new_layer:
             QgsMessageLog.logMessage(
                 f"Failed to load new output layer: {output_file}",
@@ -1424,9 +3332,22 @@ class whisp_analysis:
 
 
 
-    def create_clean_layer(self, input_layer):
-        # Filter out fields that are in the Whisp columns mapping
-        original_fields = [field for field in input_layer.fields() if field.name() not in self.whisp_columns_mapping]
+    def create_clean_layer(self, input_layer, fields_to_remove=None):
+        """
+        Create a memory copy of input_layer without selected fields.
+
+        Used when re-analyzing a layer that already contains Whisp output
+        columns. Original/source attributes are kept; old Whisp result columns
+        from the current initialized Whisp schema are removed before fresh
+        results are appended.
+        """
+        fields_to_remove = set(fields_to_remove or self.whisp_columns_mapping.keys())
+
+        # Filter out fields requested for removal.
+        original_fields = [
+            field for field in input_layer.fields()
+            if field.name() not in fields_to_remove
+        ]
         
         # Convert the input layer's WKB type to a geometry type string.
         geom_type_str = QgsWkbTypes.displayString(input_layer.wkbType())
@@ -1440,20 +3361,26 @@ class whisp_analysis:
             QgsMessageLog.logMessage("Clean layer failed to initialize", "WhispAnalysis", Qgis.Critical)
             return None
         
-        # Add only original fields to the new layer.
+        # Add only original/source fields to the new layer.
         dp = clean_layer.dataProvider()
         dp.addAttributes(original_fields)
         clean_layer.updateFields()
         
-        # Copy features from the input layer, keeping only the original attributes.
+        # Copy features from the input layer, keeping only the retained attributes.
         features = []
-        for feature in input_layer.getFeatures():
-            new_feature = QgsFeature()
+        for feature_idx, feature in enumerate(input_layer.getFeatures(), start=1):
+            # Keep the UI responsive while copying features.
+            if feature_idx % 100 == 0:
+                QApplication.processEvents()
+
+            new_feature = QgsFeature(clean_layer.fields())
             new_feature.setGeometry(feature.geometry())
             attr_list = [feature[field.name()] for field in original_fields]
             new_feature.setAttributes(attr_list)
             features.append(new_feature)
+        QApplication.processEvents()
         dp.addFeatures(features)
+        QApplication.processEvents()
         clean_layer.updateExtents()
         
         return clean_layer
@@ -1515,7 +3442,9 @@ class whisp_analysis:
                     new_fields_added = True
         
         if new_fields_added:
+            QApplication.processEvents()
             layer.commitChanges()
+            QApplication.processEvents()
             layer.startEditing()
             QgsMessageLog.logMessage("Committed new fields before API call.",
                                     "WhispAnalysis", Qgis.Info)
@@ -1550,14 +3479,20 @@ class whisp_analysis:
             transform = QgsCoordinateTransform(source_crs, target_crs, QgsProject.instance())
 
             reprojected_layer.startEditing()
-            for feature in layer.getFeatures():
+            for feature_idx, feature in enumerate(layer.getFeatures(), start=1):
+                # Keep the UI responsive during reprojection.
+                if feature_idx % 100 == 0:
+                    QApplication.processEvents()
+
                 new_feature = QgsFeature()
                 new_feature.setAttributes(feature.attributes())
                 geom = feature.geometry()
                 geom.transform(transform)
                 new_feature.setGeometry(geom)
                 reprojected_layer_data_provider.addFeature(new_feature)
+            QApplication.processEvents()
             reprojected_layer.commitChanges()
+            QApplication.processEvents()
 
             QgsMessageLog.logMessage("Layer reprojected to EPSG:4326 successfully!", "WhispAnalysis", Qgis.Info)
             # Do not add the reprojected layer to the project; it remains in memory.
@@ -1574,41 +3509,91 @@ class whisp_analysis:
 
 
 
-    def get_selected_layer_as_geojson(self, layer):
-        # Convert selected layer to EPSG:4326 if necessary and export it as GeoJSON, ensuring a 'plotId' field exists
-        
-        # Convert CRS to EPSG:4326 if needed
+    def get_selected_layer_as_geojson(self, layer, unit_type="ha", national_codes=None):
+        if national_codes is None:
+            national_codes = []
+
+        """
+        Build the request body for the Whisp API:
+        - assumes 'link_id' exists on the layer (created in on_submit_geojson)
+        - sends 'external_id' in properties, derived from 'link_id'
+        - wraps features in a FeatureCollection with analysisOptions
+        """
+
+        # Ensure we are in EPSG:4326 (defensive; on_submit_geojson already does this)
         layer = self.convert_to_epsg4326(layer)
 
-        # Ensure 'plotId' field exists
-        if "plotId" not in [field.name() for field in layer.fields()]:
-            QgsMessageLog.logMessage("Adding 'plotId' field before export.", "WhispAnalysis", Qgis.Info)
-            layer.startEditing()
-            layer.addAttribute(QgsField("plotId", QVariant.Int))
-            layer.commitChanges()
-            layer.startEditing()
+        # Safety check: make sure link_id exists
+        field_names = [field.name() for field in layer.fields()]
+        if "link_id" not in field_names:
+            QMessageBox.critical(
+                self.iface.mainWindow(),
+                "Missing link_id field",
+                "The layer sent to the Whisp API must contain a 'link_id' field, "
+                "which is used as the external identifier."
+            )
+            return None
 
-        QgsMessageLog.logMessage("Populating 'plotId' values.", "WhispAnalysis", Qgis.Info)
-        layer.startEditing()
-        for index, feature in enumerate(layer.getFeatures(), start=1):
-            feature["plotId"] = index  # Store as integer
-            QgsMessageLog.logMessage(f"Assigned plotId {index} to feature ID {feature.id()}", "WhispAnalysis", Qgis.Info)
-            layer.updateFeature(feature)
-        layer.commitChanges()
-
-        # Convert layer features to GeoJSON
         features = []
-        for feature in layer.getFeatures():
-            features.append(feature.geometry().asJson())
+        for feature_idx, feature in enumerate(layer.getFeatures(), start=1):
+            # Keep the UI responsive while building the Whisp request.
+            if feature_idx % 100 == 0:
+                QApplication.processEvents()
 
+            # Parse geometry to a Python dict
+            try:
+                geom_dict = json.loads(feature.geometry().asJson())
+            except Exception as e:
+                QgsMessageLog.logMessage(
+                    f"Failed to parse geometry for feature {feature.id()}: {e}",
+                    "WhispAnalysis",
+                    Qgis.Warning
+                )
+                continue
+
+            external_id = feature["link_id"]
+
+            # Minimal properties: just external_id from link_id
+            props = {
+                "external_id": external_id
+            }
+
+            features.append({
+                "type": "Feature",
+                "geometry": geom_dict,
+                "properties": props
+            })
+
+        # Decide whether to use async mode based on number of geometries
+        num_features = len(features)
+        QgsMessageLog.logMessage(
+            f"Preparing Whisp request with {num_features} features.",
+            "WhispAnalysis",
+            Qgis.Info
+        )
+
+        if num_features <= 250:
+            async_value = False
+        else:
+            async_value = True
+
+
+        # Wrap into the new Whisp request schema
         geojson = {
             "type": "FeatureCollection",
-            "features": [
-                {"type": "Feature", "geometry": eval(f), "properties": {"plotId": feature["plotId"]}}
-                for f, feature in zip(features, layer.getFeatures())
-            ],
+            "features": features,
+            "analysisOptions": {
+                "externalIdColumn": "external_id",
+                # Use whatever the user selected in the dialog
+                "nationalCodes": national_codes,
+                "unitType": unit_type,   # "ha" or "percent"
+                "async": async_value,
+            },
         }
+
+
         return geojson
+
 
 
 
@@ -1648,61 +3633,270 @@ class whisp_analysis:
         except Exception as e:
             QgsMessageLog.logMessage(f"Error during GeoJSON submission: {str(e)}", "WhispAnalysis", Qgis.Critical)
 
-    
 
-    def append_data_to_layer(self, layer, api_data):
-        # Append API response data as attributes to the selected layer, ensuring correct data types
+    def append_data_to_layer(self, layer, api_data,
+                            progress_bar=None,
+                            progress_start=0,
+                            progress_end=None):
+        """
+        Append API response data as attributes to the selected layer.
+
+        Join key:
+        - layer:   link_id (string)
+        - API row: external_id (string)
+
+        This version batches all edits via changeAttributeValues() for speed.
+        Optionally updates a QProgressBar while processing.
+        """
+
+        if not layer:
+            QgsMessageLog.logMessage(
+                "append_data_to_layer called with no layer.",
+                "WhispAnalysis",
+                Qgis.Warning,
+            )
+            return
+
+        # Build a lookup from external_id -> properties dict
+        api_index = {}
+        for row in api_data:
+            if not isinstance(row, dict):
+                continue
+
+            # Prefer new external_id, fall back to old plotId if present
+            if "external_id" in row:
+                key = str(row["external_id"])
+            elif "plotId" in row:
+                key = str(row["plotId"])
+            else:
+                continue
+
+            api_index[key] = row
+
+        if not api_index:
+            QgsMessageLog.logMessage(
+                "API data index is empty; nothing to append.",
+                "WhispAnalysis",
+                Qgis.Warning,
+            )
+            return
+
+        # Prepare field indices and types
+        fields = layer.fields()
+        field_indices = {field.name(): idx for idx, field in enumerate(fields)}
+        field_types = {field.name(): field.type() for field in fields}
+
+        has_link_id = "link_id" in field_indices
+
+        if not has_link_id:
+            QgsMessageLog.logMessage(
+                "append_data_to_layer: 'link_id' field not found on layer; "
+                "falling back to feature ID as join key.",
+                "WhispAnalysis",
+                Qgis.Warning,
+            )
+
+        # Progress setup
+        total_features = layer.featureCount()
+        if progress_bar is not None:
+            if progress_end is None:
+                progress_end = progress_start + total_features
+            span = max(progress_end - progress_start, 1)
+        else:
+            span = None
+
+        attr_changes = {}
+        processed = 0
+
+        for feature in layer.getFeatures():
+            processed += 1
+
+            if has_link_id:
+                join_key = str(feature["link_id"])
+            else:
+                join_key = str(feature.id())
+
+            row = api_index.get(join_key)
+            if not row:
+                QgsMessageLog.logMessage(
+                    f"No match found for feature {feature.id()} (join_key={join_key})",
+                    "WhispAnalysis",
+                    Qgis.Warning,
+                )
+                # Still count as processed for progress
+                if progress_bar is not None:
+                    value = progress_start + int(processed * span / max(total_features, 1))
+                    progress_bar.setValue(value)
+                if processed % 50 == 0:
+                    QApplication.processEvents()
+                continue
+
+            fid = feature.id()
+            per_feature_changes = {}
+
+            for key, value in row.items():
+                if key not in field_indices:
+                    # user may not have selected this column
+                    continue
+
+                # --- NEW: normalize nested structures to JSON text ---
+                # Prevent QVariantMap / QVariantList from ever reaching the layer
+                if isinstance(value, (dict, list)):
+                    try:
+                        value = json.dumps(value)
+                    except Exception:
+                        value = str(value)
+                # --- END NEW ---
+
+                field_idx = field_indices[key]
+                target_type = field_types.get(key)
+
+                # Cast value according to QGIS field type
+                cast_value = None
+                try:
+                    if value is None or value == "":
+                        cast_value = None
+                    elif target_type == QVariant.Int:
+                        cast_value = int(value)
+                    elif target_type == QVariant.Double:
+                        v = float(value)
+                        if key == "Area" and v <= 0.01:
+                            cast_value = None
+                        elif key in ("Centroid_lon", "Centroid_lat"):
+                            cast_value = round(v, 6)
+                        else:
+                            cast_value = round(v, 3)
+                    else:
+                        cast_value = str(value)
+                except Exception as e:
+                    QgsMessageLog.logMessage(
+                        f"Error casting value for field '{key}' on feature {fid}: {e}",
+                        "WhispAnalysis",
+                        Qgis.Warning,
+                    )
+                    cast_value = None
+
+                per_feature_changes[field_idx] = cast_value
+
+
+            if per_feature_changes:
+                attr_changes[fid] = per_feature_changes
+
+            # Keep the UI responsive while iterating. When a progress bar is
+            # provided, also update it; otherwise just allow Qt to process timers
+            # such as the saving-dot animation.
+            if progress_bar is not None:
+                value = progress_start + int(processed * span / max(total_features, 1))
+                progress_bar.setValue(value)
+            if processed % 50 == 0:
+                QApplication.processEvents()
+
+        if not attr_changes:
+            QgsMessageLog.logMessage(
+                "No attribute changes to apply (attr_changes is empty).",
+                "WhispAnalysis",
+                Qgis.Info,
+            )
+            return
+
+        QgsMessageLog.logMessage(
+            f"Applying attribute changes for {len(attr_changes)} features.",
+            "WhispAnalysis",
+            Qgis.Info,
+        )
+
         if not layer.isEditable():
             layer.startEditing()
 
-        # Get field data types
-        field_types = {field.name(): field.type() for field in layer.fields()}
+        provider = layer.dataProvider()
+        QApplication.processEvents()
+        success = provider.changeAttributeValues(attr_changes)
+        QApplication.processEvents()
 
-        for feature in layer.getFeatures():
-            feature_plot_id = str(feature["plotId"])
-            matched = False
-
-            for row in api_data:
-                if str(row["plotId"]) == feature_plot_id:
-                    matched = True
-                    QgsMessageLog.logMessage(f"Updating feature {feature.id()} with API data.", "WhispAnalysis", Qgis.Info)
-
-                    for key, value in row.items():
-                        if key in field_types:  # Ensure the field exists
-                            if field_types[key] == QVariant.Double:  # Numeric field expected
-                                try:
-                                    if isinstance(value, dict):
-                                        QgsMessageLog.logMessage(f"Value for field {key} is a dict; converting to string.", "WhispAnalysis", Qgis.Warning)
-                                        feature[key] = str(value)
-                                    else:
-                                        value_float = float(value)
-                                        # Whisp API returns Area for points. If the value is 0.01 or smaller, assign NULL.
-                                        if key == "Area" and value_float <= 0.01:
-                                            feature[key] = None
-                                        else:
-                                            if key in ["Centroid_lon", "Centroid_lat"]:
-                                                feature[key] = round(value_float, 6)
-                                            else:
-                                                feature[key] = round(value_float, 3)
-                                except (ValueError, TypeError) as e:
-                                    QgsMessageLog.logMessage(f"Failed to convert {value} for {key}: {e}", "WhispAnalysis", Qgis.Warning)
-                            elif field_types[key] == QVariant.Int:  # Integer field expected
-                                try:
-                                    feature[key] = int(value)
-                                except (ValueError, TypeError) as e:
-                                    QgsMessageLog.logMessage(f"Failed to convert {value} to integer for {key}: {e}", "WhispAnalysis", Qgis.Warning)
-                            else:
-                                feature[key] = str(value)  # For non-numeric fields, just store as string
-
-                    layer.updateFeature(feature)
-                    break  # Stop searching once a match is found
-
-            if not matched:
-                QgsMessageLog.logMessage(f"No match found for feature {feature.id()}", "WhispAnalysis", Qgis.Warning)
+        if not success:
+            QgsMessageLog.logMessage(
+                "dataProvider.changeAttributeValues() returned False.",
+                "WhispAnalysis",
+                Qgis.Warning,
+            )
 
         layer.commitChanges()
+        QApplication.processEvents()
         layer.triggerRepaint()
-        QgsMessageLog.logMessage("Layer updated with API data.", "WhispAnalysis", Qgis.Info)
+
+        # Ensure final bar position
+        if progress_bar is not None and progress_end is not None:
+            progress_bar.setValue(progress_end)
+            QApplication.processEvents()
+
+        QgsMessageLog.logMessage(
+            "Layer updated with API data (batched changeAttributeValues).",
+            "WhispAnalysis",
+            Qgis.Info,
+        )
+
+
+
+    # def append_data_to_layer(self, layer, api_data):
+    #     # Append API response data as attributes to the selected layer, ensuring correct data types
+    #     if not layer.isEditable():
+    #         layer.startEditing()
+
+    #     # Get field data types
+    #     field_types = {field.name(): field.type() for field in layer.fields()}
+
+    #     for feature in layer.getFeatures():
+    #         # Use link_id on the layer as the join key
+    #         feature_external_id = str(feature["link_id"])
+    #         matched = False
+
+    #         for row in api_data:
+    #             # API response should echo back the external_id we sent
+    #             row_external_id = str(row.get("external_id"))
+    #             if row_external_id == feature_external_id:
+    #                 matched = True
+    #                 QgsMessageLog.logMessage(
+    #                     f"Updating feature {feature.id()} with API data (external_id={row_external_id}).",
+    #                     "WhispAnalysis",
+    #                     Qgis.Info
+    #                 )
+                    
+    #                 for key, value in row.items():
+    #                     if key in field_types:  # Ensure the field exists
+    #                         if field_types[key] == QVariant.Double:  # Numeric field expected
+    #                             try:
+    #                                 if isinstance(value, dict):
+    #                                     QgsMessageLog.logMessage(f"Value for field {key} is a dict; converting to string.", "WhispAnalysis", Qgis.Warning)
+    #                                     feature[key] = str(value)
+    #                                 else:
+    #                                     value_float = float(value)
+    #                                     # Whisp API returns Area for points. If the value is 0.01 or smaller, assign NULL.
+    #                                     if key == "Area" and value_float <= 0.01:
+    #                                         feature[key] = None
+    #                                     else:
+    #                                         if key in ["Centroid_lon", "Centroid_lat"]:
+    #                                             feature[key] = round(value_float, 6)
+    #                                         else:
+    #                                             feature[key] = round(value_float, 3)
+    #                             except (ValueError, TypeError) as e:
+    #                                 QgsMessageLog.logMessage(f"Failed to convert {value} for {key}: {e}", "WhispAnalysis", Qgis.Warning)
+    #                         elif field_types[key] == QVariant.Int:  # Integer field expected
+    #                             try:
+    #                                 feature[key] = int(value)
+    #                             except (ValueError, TypeError) as e:
+    #                                 QgsMessageLog.logMessage(f"Failed to convert {value} to integer for {key}: {e}", "WhispAnalysis", Qgis.Warning)
+    #                         else:
+    #                             feature[key] = str(value)  # For non-numeric fields, just store as string
+
+    #                 layer.updateFeature(feature)
+    #                 break  # Stop searching once a match is found
+
+    #         if not matched:
+    #             QgsMessageLog.logMessage(f"No match found for feature {feature.id()}", "WhispAnalysis", Qgis.Warning)
+
+    #     layer.commitChanges()
+    #     layer.triggerRepaint()
+    #     QgsMessageLog.logMessage("Layer updated with API data.", "WhispAnalysis", Qgis.Info)
 
 
 
