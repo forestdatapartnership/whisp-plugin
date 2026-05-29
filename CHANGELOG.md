@@ -86,6 +86,7 @@
   - Long loops now periodically process Qt events during reprojection, geometry preparation, request building, and result writing.
 
 ### Removed
+- Removed residual files and directories from PluginMaker.
 
 - Removed the older simulated progress approach based on estimated feature count/area.
   - Replaced with indeterminate progress plus real Whisp API progress when available.
