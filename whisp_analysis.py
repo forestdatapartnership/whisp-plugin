@@ -3606,7 +3606,7 @@ class whisp_analysis:
         }
 
         try:
-            response = requests.post(url, json=geojson, headers=headers)
+            response = requests.post(url, json=geojson, headers=headers, timeout=300)
             if response.status_code == 200:
                 result = response.json()
                 QgsMessageLog.logMessage(f"API Response: {result}", "WhispAnalysis", Qgis.Info)
