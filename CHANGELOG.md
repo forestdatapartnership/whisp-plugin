@@ -37,6 +37,8 @@
 
 ### Changed
 
+- Minimum supported QGIS version is now 3.40.
+
 - Changed the plugin launch flow to use a dedicated `launch_plugin()` workflow.
   - API key check.
   - Whisp column initialization.
